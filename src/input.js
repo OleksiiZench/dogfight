@@ -3,7 +3,7 @@ export function createInput(target) {
 	const pressed = new Set();
 
 	target.addEventListener("keydown", (e) => {
-		if (e.code.startsWith("Arrow")) e.preventDefault();
+		if (e.code.startsWith("Arrow") || e.code === "Space") e.preventDefault();
 		if (e.repeat) return;
 		if (!down.has(e.code)) pressed.add(e.code);
 		down.add(e.code);
