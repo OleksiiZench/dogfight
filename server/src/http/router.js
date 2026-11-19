@@ -47,7 +47,7 @@ function busyWait(milliseconds) {
 }
 
 export async function handleApi(req, res, url, context) {
-	const { config, rooms, startedAt } = context;
+	const { config, rooms, startedAt, gameServer } = context;
 
 	if (url.pathname === "/health") {
 		if (req.method !== "GET") methodNotAllowed(res, "GET");
@@ -56,6 +56,8 @@ export async function handleApi(req, res, url, context) {
 			uptimeMs: Date.now() - startedAt,
 			rss: process.memoryUsage().rss,
 			rooms: rooms.rooms.size,
+			wsClients: gameServer?.clients.size ?? 0,
+			droppedMessages: gameServer?.stats.droppedMessages ?? 0,
 		});
 		return true;
 	}

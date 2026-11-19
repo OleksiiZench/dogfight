@@ -10,6 +10,7 @@ import { keyboardIntent } from "./controls.js";
 import { createBus } from "./events/bus.js";
 import { createInput } from "./input.js";
 import { createLoop } from "./loop.js";
+import { Connection } from "./net/connection.js";
 import { Lobby } from "./net/lobby.js";
 import { setupCanvas } from "./render/canvas.js";
 import {
@@ -22,6 +23,7 @@ import {
 import { createSprites } from "./render/sprites.js";
 import { createBot } from "./sim/bot.js";
 import { Game } from "./sim/game.js";
+import { createChatPanel } from "./ui/chatView.js";
 import { createHud } from "./ui/hud.js";
 import { createLoadingScreen } from "./ui/loading.js";
 import { createLobbyView } from "./ui/lobbyView.js";
@@ -33,6 +35,7 @@ const { ctx, view } = setupCanvas(canvas);
 const input = createInput(window);
 const bus = createBus();
 const audio = createAudio();
+const connection = new Connection();
 const hud = createHud(bus);
 attachAudio(bus, audio);
 
@@ -128,7 +131,7 @@ async function boot() {
 
 		loading.dispose();
 		loading = null;
-		showLobby(manifest.rooms ?? "/api/rooms.json", {
+		showLobby(manifest.rooms ?? "/api/rooms", {
 			arena: assets.arena,
 			sprites: createSprites(assets.sprites.sheet),
 		});
@@ -142,13 +145,18 @@ async function boot() {
 }
 
 function showLobby(roomsUrl, assets) {
-	const lobby = new Lobby({ url: roomsUrl });
+	const lobby = new Lobby({ url: roomsUrl, connection });
 	lobbyView = createLobbyView({ mount: document.body, lobby });
 
 	lobby.addEventListener("joined", ({ detail }) => {
+		void audio.unlock();
+		console.log(`[lobby] ${detail.name} → ${detail.room.id}`);
+	});
+
+	lobby.addEventListener("start", ({ detail }) => {
+		lobby.detach();
 		lobbyView?.destroy();
 		lobbyView = null;
-		void audio.unlock();
 		startGame(detail.room, detail.name, assets);
 	});
 
@@ -156,6 +164,13 @@ function showLobby(roomsUrl, assets) {
 }
 
 function startGame(room, pilotName, assets) {
+	const gameChat = createChatPanel({
+		mount: document.body,
+		connection,
+		title: "Чат бою",
+		variant: "game-chat",
+	});
+	gameChat.append(`[система] кімната ${room.id}, пілот ${pilotName}`);
 	const game = new Game({
 		seed: room.seed ?? 1,
 		arena: room.arena ?? assets.arena ?? undefined,

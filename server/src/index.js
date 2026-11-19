@@ -6,6 +6,7 @@ import { loadConfig } from "./config.js";
 import { HttpError, handleApi, sendJson } from "./http/router.js";
 import { serveStatic } from "./http/static.js";
 import { RoomManager } from "./rooms.js";
+import { attachWebSocket } from "./ws.js";
 
 export async function createApp(config = loadConfig()) {
 	await mkdir(config.logDir, { recursive: true });
@@ -30,6 +31,9 @@ export async function createApp(config = loadConfig()) {
 		socket.on("error", (error) => console.error("[socket]", error.message));
 	});
 
+	const gameServer = attachWebSocket(server, { config, rooms });
+	closeHooks.push(() => gameServer.close());
+
 	async function handleRequest(req, res) {
 		if (closing) {
 			sendJson(res, 503, { ok: false, error: "server is shutting down" });
@@ -42,7 +46,7 @@ export async function createApp(config = loadConfig()) {
 					config,
 					rooms,
 					startedAt,
-					closeHooks,
+					gameServer,
 				});
 				if (!handled) sendJson(res, 404, { error: "unknown endpoint" });
 				return;
@@ -75,11 +79,6 @@ export async function createApp(config = loadConfig()) {
 	async function close() {
 		if (closing) return closing;
 		closing = (async () => {
-			const stopped = new Promise((resolveClosed) =>
-				server.close(resolveClosed),
-			);
-			for (const socket of sockets) socket.destroy();
-			await stopped;
 			for (const hook of closeHooks) {
 				try {
 					await hook();
@@ -87,11 +86,25 @@ export async function createApp(config = loadConfig()) {
 					console.error("[shutdown]", error.message);
 				}
 			}
+			const stopped = new Promise((resolveClosed) =>
+				server.close(resolveClosed),
+			);
+			for (const socket of sockets) socket.destroy();
+			await stopped;
 		})();
 		return closing;
 	}
 
-	return { config, rooms, server, sockets, closeHooks, listen, close };
+	return {
+		config,
+		rooms,
+		server,
+		sockets,
+		gameServer,
+		closeHooks,
+		listen,
+		close,
+	};
 }
 
 const isMain =
