@@ -17,6 +17,8 @@
 		"preview": "npm run preview --workspace dogfight-client",
 		"start": "npm run start --workspace dogfight-server",
 		"test": "npm run test --workspaces --if-present",
+		"benchmark:netcode": "node scripts/benchmark-codec.mjs",
+		"record:netcode": "node scripts/record-netcode.mjs",
 		"lint": "biome check .",
 		"fix": "biome check --write ."
 	},

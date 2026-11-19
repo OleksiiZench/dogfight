@@ -3,6 +3,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { LatencyInjector } from "./latency.js";
 import {
 	CLOSE,
+	decodeBinaryClientMessage,
 	decodeClientMessage,
 	encodeMessage,
 	PROTOCOL_VERSION,
@@ -38,7 +39,11 @@ export function attachWebSocket(server, { config, rooms }) {
 
 	wss.on("error", (error) => console.error("[ws]", error.message));
 
-	function send(socket, message, { critical = false, delayed = false } = {}) {
+	function send(
+		socket,
+		message,
+		{ critical = false, delayed = false, codec = "json" } = {},
+	) {
 		if (socket.readyState !== WebSocket.OPEN) return;
 		if (socket.bufferedAmount > config.slowClientBufferBytes) {
 			if (!critical) {
@@ -51,8 +56,8 @@ export function attachWebSocket(server, { config, rooms }) {
 				return;
 			}
 		}
-		const payload = encodeMessage(message);
-		stats.bytesOut += Buffer.byteLength(payload);
+		const payload = encodeMessage(message, codec);
+		stats.bytesOut += payload.byteLength ?? Buffer.byteLength(payload);
 		if (!delayed) {
 			socket.send(payload);
 			return;
@@ -111,7 +116,7 @@ export function attachWebSocket(server, { config, rooms }) {
 			const snapshot = match.snapshotFor(state.player?.id);
 			if (!snapshot) return;
 			stats.snapshots += 1;
-			send(socket, snapshot, { delayed: true });
+			send(socket, snapshot, { delayed: true, codec: state.codec });
 		};
 		match.on("tick", state.tickHandler);
 	}
@@ -150,14 +155,14 @@ export function attachWebSocket(server, { config, rooms }) {
 				fail(socket, CLOSE.RATE_LIMIT, "too many messages");
 				return;
 			}
+			let message;
 			if (isBinary) {
-				throw new ProtocolError(
-					CLOSE.INVALID_MESSAGE,
-					"binary frames are not supported",
-				);
+				stats.bytesIn += data.byteLength;
+				message = decodeBinaryClientMessage(data, config);
+			} else {
+				stats.bytesIn += Buffer.byteLength(data.toString());
+				message = decodeClientMessage(data, config);
 			}
-			stats.bytesIn += Buffer.byteLength(data.toString());
-			const message = decodeClientMessage(data, config);
 
 			if (message.type === "ping") {
 				send(
@@ -202,6 +207,7 @@ export function attachWebSocket(server, { config, rooms }) {
 				state.joinTimer = null;
 				state.room = room;
 				state.player = player;
+				state.codec = message.codec;
 				send(
 					socket,
 					{
@@ -209,6 +215,7 @@ export function attachWebSocket(server, { config, rooms }) {
 						player,
 						room: room.info(),
 						protocol: PROTOCOL_VERSION,
+						codec: state.codec,
 						tickRate: config.tickRate,
 						net: latency.settings,
 						lastProcessedSeq: 0,
@@ -267,6 +274,7 @@ export function attachWebSocket(server, { config, rooms }) {
 		const state = {
 			room: null,
 			player: null,
+			codec: "json",
 			tickHandler: null,
 			tokens: config.messagesPerSecond,
 			lastRefill: Date.now(),
@@ -282,7 +290,7 @@ export function attachWebSocket(server, { config, rooms }) {
 			state.missedPongs = 0;
 		});
 		socket.on("message", (data, isBinary) => {
-			const hint = isBinary ? null : messageHint(data);
+			const hint = isBinary ? "input" : messageHint(data);
 			if (hint === "input" && latency.shouldDrop()) {
 				stats.droppedPackets += 1;
 				return;
@@ -313,7 +321,7 @@ export function attachWebSocket(server, { config, rooms }) {
 				joinTimeoutMs: config.joinTimeoutMs,
 				tickRate: config.tickRate,
 				net: latency.settings,
-				codecs: ["json"],
+				codecs: ["json", "binary"],
 			},
 			{ critical: true },
 		);

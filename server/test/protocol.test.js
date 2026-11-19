@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { encodeInput } from "shared/protocol/codec.js";
 import {
 	CLOSE,
+	decodeBinaryClientMessage,
 	decodeClientMessage,
 	encodeMessage,
 	ProtocolError,
@@ -12,7 +14,7 @@ test("decodes valid join, chat and leave", () => {
 		decodeClientMessage(
 			'{"v":1,"type":"join","room":"training","name":"Alpha"}',
 		),
-		{ type: "join", room: "training", name: "Alpha" },
+		{ type: "join", room: "training", name: "Alpha", codec: "json" },
 	);
 	assert.deepEqual(decodeClientMessage('{"v":1,"type":"chat","text":"hi"}'), {
 		type: "chat",
@@ -27,6 +29,12 @@ test("decodes valid join, chat and leave", () => {
 			'{"v":1,"type":"input","seq":5,"tick":2,"turn":4,"thrust":true,"fire":false}',
 		),
 		{ type: "input", seq: 5, tick: 2, turn: 1, thrust: true, fire: false },
+	);
+	assert.deepEqual(
+		decodeBinaryClientMessage(
+			encodeInput({ seq: 6, tick: 3, turn: -0.5, thrust: true, fire: true }),
+		),
+		{ type: "input", seq: 6, tick: 3, turn: -0.5, thrust: true, fire: true },
 	);
 	assert.deepEqual(decodeClientMessage('{"v":1,"type":"ping","t":12.5}'), {
 		type: "ping",

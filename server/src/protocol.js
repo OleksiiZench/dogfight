@@ -1,3 +1,4 @@
+import { decodeInput, encodeSnapshot } from "shared/protocol/codec.js";
 import { validateInput } from "shared/protocol/input.js";
 
 export const PROTOCOL_VERSION = 1;
@@ -78,10 +79,12 @@ export function decodeClientMessage(raw, options = {}) {
 			if (!ID.test(room)) {
 				throw new ProtocolError(CLOSE.INVALID_MESSAGE, "invalid room id");
 			}
+			const codec = value.codec === "binary" ? "binary" : "json";
 			return {
 				type: "join",
 				room,
 				name: boundedText(value.name, "name", nameMaxLength),
+				codec,
 			};
 		}
 		case "chat":
@@ -134,6 +137,22 @@ export function decodeClientMessage(raw, options = {}) {
 	}
 }
 
-export function encodeMessage(message) {
+export function decodeBinaryClientMessage(raw, options = {}) {
+	const { maxPayloadBytes = 4096 } = options;
+	const size = raw.byteLength ?? Buffer.byteLength(raw);
+	if (size > maxPayloadBytes) {
+		throw new ProtocolError(CLOSE.OVERSIZE, "message is too large");
+	}
+	try {
+		return decodeInput(raw);
+	} catch (error) {
+		throw new ProtocolError(CLOSE.INVALID_MESSAGE, error.message);
+	}
+}
+
+export function encodeMessage(message, codec = "json") {
+	if (codec === "binary" && message.type === "snapshot") {
+		return encodeSnapshot(message);
+	}
 	return JSON.stringify({ v: PROTOCOL_VERSION, ...message });
 }

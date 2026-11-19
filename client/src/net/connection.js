@@ -1,3 +1,4 @@
+import { decodeBinaryMessage, encodeMessage } from "shared/protocol/codec.js";
 import { dispatch } from "../events/bus.js";
 
 export function defaultSocketUrl() {
@@ -5,12 +6,14 @@ export function defaultSocketUrl() {
 	return `${protocol}//${window.location.host}/ws${window.location.search}`;
 }
 
-function encode(message) {
-	return JSON.stringify({ v: 1, ...message });
+function encode(message, codec = "json") {
+	return encodeMessage(message, codec);
 }
 
 function decode(data) {
-	return JSON.parse(data);
+	return data instanceof ArrayBuffer
+		? decodeBinaryMessage(data)
+		: JSON.parse(data);
 }
 
 function byteLength(data) {
@@ -39,6 +42,10 @@ export class Connection extends EventTarget {
 		this.intentional = false;
 		this.seq = 0;
 		this.tickRate = 30;
+		this.codec =
+			new URLSearchParams(window.location.search).get("codec") === "json"
+				? "json"
+				: "binary";
 		this.rateWindow = { at: performance.now(), bytesIn: 0, bytesOut: 0 };
 		this.stats = {
 			rttMs: 0,
@@ -137,7 +144,7 @@ export class Connection extends EventTarget {
 	}
 
 	rawSend(message) {
-		const payload = encode(message);
+		const payload = encode(message, this.codec);
 		this.stats.bytesOut += byteLength(payload);
 		this.socket?.send(payload);
 	}
@@ -146,7 +153,7 @@ export class Connection extends EventTarget {
 		if (this.socket?.readyState === WebSocket.OPEN) {
 			this.rawSend(message);
 		} else if (queue) {
-			this.queue.push(encode({ v: 1, ...message }));
+			this.queue.push(encode(message, this.codec));
 		}
 	}
 
@@ -166,10 +173,10 @@ export class Connection extends EventTarget {
 	}
 
 	join(room, name) {
-		this.joinRequest = { room, name };
+		this.joinRequest = { room, name, codec: this.codec };
 		this.roomId = room;
 		if (this.socket?.readyState === WebSocket.OPEN) {
-			this.rawSend({ type: "join", room, name });
+			this.rawSend({ type: "join", ...this.joinRequest });
 		}
 	}
 
