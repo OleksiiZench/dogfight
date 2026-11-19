@@ -8,6 +8,9 @@
 - Лаба 2 (об'єкти, прототипи, `this`, композиція): тег `lab-02`, цей README
 - Лаба 3 (Promises, `async`/`await`, завантаження, лобі, звук): цей README, розділ «Лаба 3» нижче
 - Лаба 4 (Node.js, `EventEmitter`, streams, WebSocket): цей README, розділ «Лаба 4» нижче
+- Лаба 5 (authoritative server, prediction, interpolation, binary protocol): цей README, розділ «Лаба 5» нижче
+
+![Два вікна браузера з двома гравцями при 100 мс ± 30 мс і 2% втрат](docs/assets/lab-05-two-player.gif)
 
 ## Запуск
 
@@ -17,6 +20,8 @@
     npm run start    # сервер віддає зібраний клієнт
     npm run test     # node:test
     npm run lint     # Biome
+    npm run benchmark:netcode  # JSON vs binary, 30 Гц, 4 гравці
+    npm run record:netcode     # 20-секундний GIF двох вікон (потрібен ffmpeg)
 
 Керування: ←/→ або A/D — поворот, ↑ або W — тяга, Space або клік мишею — вогонь.
 Супротивник — бот (червоний дрон). Рахунок: +100 за збитий дрон, +10 за астероїд.
@@ -512,3 +517,160 @@ HTTP-клієнт) і в політиці `bufferedAmount` для WS-сокет�
 Останній рядок дає `12 6 65280`: `Buffer` рахує байти UTF-8, а `.length` —
 символи; `readUInt16BE` читає `0xff00` = 65280. У лабі 5 це стане частиною
 бінарного протоколу.
+
+## Лаба 5 — Real-Time Networking
+
+Умови:
+[`lab-05-realtime-networking.md`](../Programming-Practice-Projects/courses/javascript/lab-05-realtime-networking.md),
+нотатки:
+[`lab-05-realtime-networking.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-05-realtime-networking.notes.md).
+
+Три проблеми, які вирішує ця лаба: **consistency** (два клієнти не можуть мати
+різні світи), **fairness/cheating** (клієнт не має вирішувати, де він знаходиться)
+і **latency** (правда сервера приходить на 80–250 мс пізніше, ніж натискання
+клавіші). Перші дві дає authoritative server, третю — prediction +
+reconciliation для себе й interpolation для інших.
+
+### M1 — спільна симуляція й сервер
+
+`shared/` — третій npm workspace; `shared/src/sim/*` працює і в Node, і у Vite
+без DOM. `server/src/match.js` запускає цю саму симуляцію з фіксованим
+`dt = 1/30`, застосовує останній валідний input гравця (`seq` монотонно зростає)
+і шле snapshot із `tick` та персональним `lastProcessedSeq`. Клієнт поки що
+малював тільки те, що сказав сервер: при 100 мс затримки корабель реагував із
+помітною затримкою. `LatencyInjector` додає base + jitter і drop до input/snapshots;
+`join`, `net` і ping лишаються критичними й не відкладаються. Netgraph показує
+RTT, вік snapshot, bytes/s, pending inputs і correction.
+
+### M2 — prediction, reconciliation, determinism
+
+Клієнт сам інтегрує свої наміри кожен серверний тік (30 Гц) і тримає чергу
+непідтверджених input'ів. Коли приходить snapshot: ставимо корабель у стан
+сервера, викидаємо inputs з `seq <= ack`, потім відтворюємо решту в тому ж
+порядку. Різниця між передбаченим і остаточним станом потрапляє в
+`connection.stats.correction`, а візуальна позиція зближується з нею за ~100 мс,
+щоб приховати ривок.
+
+Замір із `/?latency=100&jitter=30&drop=0.02`: RTT ≈ 250 мс, за перші 100 мс
+корабель вже зрушив на ~4px (без prediction він би стояв), далі `y` пішов
+`587.9 → 426.2`, correction ≈ 63px на зіткненнях і близько 0 у порожньому просторі.
+
+Перевірка детермінізації: тимчасово додав `Math.random()` у
+`shared/src/sim/ship.js`, prediction і сервер розійшлися — correction підскочила
+до 262px; скріншот збережено. Потім код повернуто, `npm run test` і build
+перевірені знову.
+
+![Netgraph із великою корекцією після навмисного порушення детермінізації](docs/assets/lab-05-corrections.png)
+
+### M3 — interpolation і другий гравець
+
+`client/src/net/match.js` тримає історію snapshot'ів і малює чужі сутності на
+`now − interpolationDelay` (66 мс = два тіки при 30 Гц), беручи дві frame, що
+охоплюють цей момент. Позиції й кути інтерполюються, кут — через найкоротшу дугу
+(`lerpAngle`), тому перехід через `-π/π` не обертає корабель на 359°. Нові сутності
+з'являються з останнього стану, зниклі — зникають без «привидів».
+
+Кулі мають `sourceSeq`: локальна куля створюється одразу, а коли сервер підтверджує
+її, передбачена копія замінюється авторитетною за цим seq; локальний owner
+не малюється двічі. Двопанельний smoke з 100 мс ± 30 мс і 2% втрат показав
+`predicted 1 → confirmed 1–2` і 12/12 вибірок з відставанням інтерпольованого
+корабля від останнього snapshot.
+
+### M4 — бінарний DataView-протокол
+
+Формат описаний коментарем на початку `shared/src/protocol/codec.js`: версія 1,
+усі числа little-endian. Input — 13 байт (`seq`, `tick`, `turn` як `Int16` у
+1/1000 рад, `thrust`, `fire`). Snapshot — `tick`, арена, гравці, сутності, події
+як JSON-хвіст і `lastProcessedSeq`; час у мс, вік у сантисекундах, кут у
+`Int16 × 1000`. Клієнт оголошує `binaryType = "arraybuffer"`; `hello` показує
+`["json", "binary"]`, `join` обирає кодек, за замовчуванням binary.
+`?codec=json` залишає старий JSON для порівняння; chat/ping/roster ідуть JSON.
+
+Обидва smoke-режими пройшли: binary і JSON дали однакові predicted/confirmed
+bullets, 12/12 interpolation sample, `problems: []`.
+
+Замір `npm run benchmark:netcode` (симуляція з 4 гравцями, 10 сутностей у
+snapshot):
+
+| Метрика (30 Гц, 4 гравці) |         JSON |      Binary | Менше, % |
+| ------------------------- | -----------: | ----------: | -------: |
+| Snapshot, bytes           |         4267 |         692 |     83.8 |
+| Downstream на клієнта     | 125.01 KiB/s | 20.27 KiB/s |     83.8 |
+| Upstream на клієнта       |   2.40 KiB/s |  0.41 KiB/s |     82.9 |
+| Upstream 4 гравців        |   9.61 KiB/s |  1.64 KiB/s |     82.9 |
+| Input, bytes              |           82 |          14 |     82.9 |
+| Encode + decode, µs       |        17.24 |       54.87 |   -218.3 |
+
+Перемога тут у трафіку, не в CPU: цей DataView-кодек повільніше `JSON.stringify`
+на невеликому повідомленні, але економить ~84% каналу. Round-trip тести
+`decode(encode(msg))` звіряють числа з tolerance 0.011 (квантування кута й
+форми астероїда) і точні рядки/прапорці.
+
+Артефакти:
+[GIF двох вікон](docs/assets/lab-05-two-player.gif) (20 с, 10 fps),
+[скріншот корекції](docs/assets/lab-05-corrections.png),
+[скрипт бенчмарку](scripts/benchmark-codec.mjs),
+[скрипт запису](scripts/record-netcode.mjs).
+
+### Reflection
+
+1. **Чому сервер authoritative?** Client-authoritative має дві проблеми: гравці
+   бачать різні світи (float drift, dropped packets) і клієнт може надіслати
+   `{ x: 9999, y: 9999 }` або `turn: 1000`, телепортуючись/продовжуючи стріляти
+   крізь стіни. Сервер приймає лише валідовані наміри й сам рахує позиції.
+2. **Prediction.** Клієнт застосовує свій input до тієї самої чистої симуляції
+   одразу, не чекаючи сервера. Потрібна детермінованість: ті самі стан і входи
+   дають той самий результат. Порушення детектується ростом `correction` у
+   netgraph або hash-тестом `Node vs Chrome` на 1000 кроків.
+3. **Reconciliation.** Snapshot tick 100 з `ack = 57`, буфер `55–61`, клієнт
+   уже на tick 104: (a) ставимо ship у серверний стан tick 100; (b) викидаємо
+   55, 56, 57; (c) повторно застосовуємо 58, 59, 60, 61 у порядку; (d) плавно
+   зближуємо visible position з результатом. Після цього клієнт там, де сервер
+   буде через кілька тіків.
+4. **Чому інтерполяція в минулому?** Snap-и приходять дискретно; малювання
+   останнього дає 30 Гц строб. Буфер і `now − 66 мс` дають дві сусідні frame і
+   плавний 60 fps рух. Ціна — бачимо супротивника на ~66 мс позаду; 66 мс обрано
+   як 2 інтервали 30 Гц: ще достатньо для jitter ±30 мс, але менше помітної
+   затримки.
+5. **Lag compensation.** Сервер тимчасово відмотує світ до моменту, який стрілок
+   бачив, і перевіряє постріл проти тих позицій. Без інтерполяції стрілок бачив
+   би «сьогоднішнє» положення; з інтерполяцією — минуле, тому без rewind кулі
+   промахувалися б по швидких цілях. У цій лабі це Stretch, не реалізовано.
+6. **DataView vs Float32Array.** `Float32Array` добрий для однорідного масиву
+   float'ів і швидких блокових операцій. `DataView` потрібен для змішаного
+   формату (`u8`, `i16`, `f32`, UTF-8) і дозволяє явно вказати endianness.
+   Протокол мусить фіксувати little-endian, бо клієнт і сервер можуть працювати
+   на різних архітектурах; локальний typed array живе в одному процесі й
+   використовує native order.
+7. **Точність кута.** `Int16 / 1000` дає крок 0.001 рад ≈ 0.057°, похибка
+   ±0.0005 рад ≈ ±0.03°. При радіусі корабля 14px це субпіксельна похибка,
+   тому 2 байти замість 4 не дають видимого тремтіння.
+8. **Чому не `setInterval`.** Його затримки додаються, а браузери/Node можуть
+   зливати таймери. `Match.schedule()` рахує абсолютний `nextTick += 1000/30`
+   і витрачає `max(0, nextTick − now)`, тому середній тік лишається на 30 Гц;
+   `lastDuration`/`lastJitter` ідуть у `/api/stats`. При перевищенні тіка
+   `wait = 0` — наступний стартує одразу, затримка видно в jitter, а якщо сервер
+   постійно CPU-bound, він уже не встигає за реальним часом.
+9. **Що зламається в симуляції.** `Math.random()` => prediction розходиться з
+   сервером (див. скріншот). Ітерація `Set` у довільному/іншому порядку =>
+   різний порядок колізій і RNG-викликів. `Date.now()` => різні `dt` і невідтворювані
+   snapshot'и. Тому все випадкове йде з `createRng(seed)`, час — тільки fixed-step.
+
+### Prove it to yourself
+
+    node -e "const b=new ArrayBuffer(8),v=new DataView(b); v.setFloat32(0,1.5,true); console.log([...new Uint8Array(b)])"
+    node -e "const b=new ArrayBuffer(8),v=new DataView(b); v.setFloat32(0,1.5,false); console.log([...new Uint8Array(b)])"
+    node -e "console.log(new Uint16Array(new Uint8Array([1,0,0,1]).buffer)[0])"
+    npm run benchmark:netcode
+    npm test
+    npm run build
+
+Перші два рядки дають `00 00 c0 3f` і `3f c0 00 00` — той самий float,
+різний порядок байтів. Третій залежить від CPU: на x86 `256` (`0x0100`), на
+big-endian — `1` (`0x0001`). Саме тому протокол явно пише little-endian у
+`DataView` і має версію.
+
+Перевірка в браузері: відкрий два вікна `/?debug=1&latency=100&jitter=30&drop=0.02`,
+приєднайся до однієї кімнати, в чаті набери `/net 100 30 0.02`. У консолі
+`window.__dogfight` дає `connection`, `matchView`, `predictor` і `loop`.
+`?codec=json` перемикає сервер і клієнт на старий текстовий формат.
