@@ -47,7 +47,7 @@ export class Entity {
 	}
 
 	handleEdges() {
-		this.pos = wrapPosition(this.pos);
+		this.pos = wrapPosition(this.pos, this.world?.arena ?? ARENA);
 	}
 
 	kill() {

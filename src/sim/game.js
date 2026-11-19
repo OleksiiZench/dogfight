@@ -1,5 +1,6 @@
+import { dispatch } from "../events/bus.js";
 import { createRng } from "../math.js";
-import { randomPoint } from "./arena.js";
+import { ARENA, randomPoint } from "./arena.js";
 import { Asteroid } from "./asteroid.js";
 import { EFFECTS, homing, timedEffect } from "./behaviors.js";
 import { Pickup } from "./pickup.js";
@@ -16,9 +17,12 @@ const PICKUP_INTERVAL = 8;
 
 // Game rules on top of World: players, score, respawn, spawners.
 export class Game {
-	constructor({ seed = 1 } = {}) {
+	constructor({ seed = 1, arena, asteroidTarget = ASTEROID_TARGET, bus } = {}) {
 		this.rng = createRng(seed);
-		this.world = new World({ rng: this.rng });
+		this.arena = { ...ARENA, ...arena };
+		this.asteroidTarget = asteroidTarget;
+		this.bus = bus;
+		this.world = new World({ rng: this.rng, arena: this.arena });
 		this.players = new Map(); // playerId -> player record
 		this.asteroidTimer = 0;
 		this.pickupTimer = PICKUP_INTERVAL;
@@ -42,7 +46,14 @@ export class Game {
 	}
 
 	start() {
-		for (let i = 0; i < ASTEROID_TARGET; i++) this.spawnAsteroid();
+		for (let i = 0; i < this.asteroidTarget; i++) this.spawnAsteroid();
+		this.publishScores();
+	}
+
+	publishScores() {
+		const scores = new Map();
+		for (const [id, player] of this.players) scores.set(id, player.score);
+		dispatch(this.bus, "scoreChanged", { scores });
 	}
 
 	step(dt) {
@@ -59,17 +70,26 @@ export class Game {
 	}
 
 	processEvents() {
+		let scoresChanged = false;
 		for (const event of this.world.drainEvents()) {
 			const killer = this.players.get(event.killerId);
 
 			if (event.type === "shipDestroyed") {
 				const victim = this.players.get(event.ship.playerId);
 				if (victim) victim.respawnIn = RESPAWN_DELAY;
-				if (killer && killer !== victim) killer.score += KILL_SCORE;
+				if (killer && killer !== victim) {
+					killer.score += KILL_SCORE;
+					scoresChanged = true;
+				}
 			} else if (event.type === "asteroidDestroyed") {
-				if (killer) killer.score += ASTEROID_SCORE;
+				if (killer) {
+					killer.score += ASTEROID_SCORE;
+					scoresChanged = true;
+				}
 			}
+			dispatch(this.bus, event.type, event);
 		}
+		if (scoresChanged) this.publishScores();
 	}
 
 	updateRespawns(dt) {
@@ -115,7 +135,7 @@ export class Game {
 		let bestClearance = -Infinity;
 
 		for (let attempt = 0; attempt < 20; attempt++) {
-			const point = randomPoint(this.rng);
+			const point = randomPoint(this.rng, 60, this.arena);
 			let clearance = Number.POSITIVE_INFINITY;
 			for (const entity of this.world) {
 				if (!entity.alive || !entity.solid) continue;
@@ -137,7 +157,7 @@ export class Game {
 	maintainAsteroids(dt) {
 		let count = 0;
 		for (const _ of this.world.ofKind("asteroid")) count++;
-		if (count >= ASTEROID_TARGET) {
+		if (count >= this.asteroidTarget) {
 			this.asteroidTimer = ASTEROID_DELAY;
 			return;
 		}

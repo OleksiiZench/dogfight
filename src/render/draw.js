@@ -1,5 +1,6 @@
 import { EFFECTS } from "../sim/behaviors.js";
 import { RESPAWN_DELAY } from "../sim/game.js";
+import { drawSprite } from "./sprites.js";
 
 export function drawArena(ctx, arena) {
 	const { width, height } = arena;
@@ -65,7 +66,23 @@ function drawDrone(ctx, ship) {
 	ctx.lineTo(8, 6);
 	ctx.closePath();
 	ctx.fill();
+}
 
+function drawShip(ctx, ship, alpha, sprites) {
+	const pos = ship.renderPos(alpha);
+	const angle = ship.renderAngle(alpha);
+	const hitFlash =
+		ship.hasBehavior("invuln") && Math.floor(ship.age * 12) % 2 === 0;
+
+	ctx.save();
+	ctx.translate(pos.x, pos.y);
+
+	ctx.save();
+	ctx.rotate(angle);
+	ctx.globalAlpha = hitFlash ? 0.35 : 1;
+	if (!drawSprite(ctx, sprites?.ship, 96)) drawDrone(ctx, ship);
+	ctx.fillStyle = ship.color;
+	ctx.fillRect(-9, -9, 18, 18);
 	if (ship.thrusting) {
 		ctx.fillStyle = "#fb923c";
 		ctx.beginPath();
@@ -75,20 +92,6 @@ function drawDrone(ctx, ship) {
 		ctx.closePath();
 		ctx.fill();
 	}
-}
-
-function drawShip(ctx, ship, alpha) {
-	const pos = ship.renderPos(alpha);
-	const hitFlash =
-		ship.hasBehavior("invuln") && Math.floor(ship.age * 12) % 2 === 0;
-
-	ctx.save();
-	ctx.translate(pos.x, pos.y);
-
-	ctx.save();
-	ctx.rotate(ship.renderAngle(alpha));
-	ctx.globalAlpha = hitFlash ? 0.35 : 1;
-	drawDrone(ctx, ship);
 	ctx.restore();
 
 	if (ship.hasBehavior("shield")) {
@@ -110,27 +113,37 @@ function drawShip(ctx, ship, alpha) {
 	ctx.restore();
 }
 
-function drawBullet(ctx, bullet, alpha) {
+function drawBullet(ctx, bullet, alpha, sprites) {
 	const pos = bullet.renderPos(alpha);
-	const tail = pos.sub(bullet.vel.normalize().scale(14));
+	const angle = Math.atan2(bullet.vel.y, bullet.vel.x);
 	ctx.save();
+	ctx.translate(pos.x, pos.y);
+	if (drawSprite(ctx, sprites?.bullet, 56, angle)) {
+		ctx.restore();
+		return;
+	}
+	const tail = bullet.vel.normalize().scale(14);
 	ctx.strokeStyle = bullet.hasBehavior("homing") ? "#f472b6" : "#fde68a";
 	ctx.lineWidth = 3;
 	ctx.lineCap = "round";
 	ctx.beginPath();
-	ctx.moveTo(tail.x, tail.y);
-	ctx.lineTo(pos.x, pos.y);
+	ctx.moveTo(-tail.x, -tail.y);
+	ctx.lineTo(0, 0);
 	ctx.stroke();
 	ctx.restore();
 }
 
-function drawAsteroid(ctx, asteroid, alpha) {
+function drawAsteroid(ctx, asteroid, alpha, sprites) {
 	const pos = asteroid.renderPos(alpha);
 	const angle = asteroid.renderAngle(alpha);
 	const count = asteroid.shape.length;
 
 	ctx.save();
 	ctx.translate(pos.x, pos.y);
+	if (drawSprite(ctx, sprites?.asteroid, asteroid.radius * 2.4, angle)) {
+		ctx.restore();
+		return;
+	}
 	ctx.rotate(angle);
 	ctx.beginPath();
 	for (let i = 0; i < count; i++) {
@@ -150,13 +163,17 @@ function drawAsteroid(ctx, asteroid, alpha) {
 	ctx.restore();
 }
 
-function drawPickup(ctx, pickup, alpha) {
+function drawPickup(ctx, pickup, alpha, sprites) {
 	const pos = pickup.renderPos(alpha);
 	const effect = EFFECTS.get(pickup.effect);
 	const pulse = Math.sin(pickup.age * 4) * 2;
 
 	ctx.save();
 	ctx.translate(pos.x, pos.y);
+	if (drawSprite(ctx, sprites?.pickup, pickup.radius * 3)) {
+		ctx.restore();
+		return;
+	}
 	ctx.strokeStyle = effect.color;
 	ctx.fillStyle = effect.color;
 	ctx.lineWidth = 3;
@@ -193,8 +210,8 @@ const DRAWERS = new Map([
 // back to front
 export const DRAW_ORDER = ["pickup", "asteroid", "bullet", "ship", "explosion"];
 
-export function drawEntity(ctx, entity, alpha) {
-	DRAWERS.get(entity.kind)?.(ctx, entity, alpha);
+export function drawEntity(ctx, entity, alpha, sprites) {
+	DRAWERS.get(entity.kind)?.(ctx, entity, alpha, sprites);
 }
 
 export function drawHud(ctx, stats) {
@@ -215,7 +232,7 @@ export function drawHud(ctx, stats) {
 	ctx.restore();
 }
 
-export function drawScoreboard(ctx, game, view, localId) {
+export function drawScoreboard(ctx, game, view, localId, scores) {
 	const players = [...game.players.values()];
 	const gap = 180;
 	const startX = view.width / 2 - ((players.length - 1) * gap) / 2;
@@ -226,7 +243,11 @@ export function drawScoreboard(ctx, game, view, localId) {
 	ctx.textBaseline = "top";
 	players.forEach((player, i) => {
 		ctx.fillStyle = player.color;
-		ctx.fillText(`${player.name}: ${player.score}`, startX + i * gap, 12);
+		ctx.fillText(
+			`${player.name}: ${scores?.get(player.id) ?? 0}`,
+			startX + i * gap,
+			12,
+		);
 	});
 
 	const local = game.players.get(localId);

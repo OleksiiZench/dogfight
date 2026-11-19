@@ -1,3 +1,4 @@
+import { ARENA } from "./arena.js";
 import { findCollisions } from "./collision.js";
 import { resolveCollision } from "./rules.js";
 
@@ -6,8 +7,9 @@ export class World {
 	#snapshot = []; // reused buffer: entities spawned mid-step wait for next step
 	#events = [];
 
-	constructor({ rng }) {
+	constructor({ rng, arena = ARENA }) {
 		this.rng = rng;
+		this.arena = arena;
 	}
 
 	get size() {

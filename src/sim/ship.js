@@ -102,6 +102,12 @@ export class Ship extends Entity {
 		}
 
 		this.world.spawn(bullet);
+		this.world.emit({
+			type: "fired",
+			ownerId: this.playerId,
+			pos: bullet.pos,
+			angle: this.angle,
+		});
 		return true;
 	}
 }
