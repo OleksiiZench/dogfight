@@ -13,21 +13,25 @@ export class Ship extends Entity {
 	#hp;
 
 	constructor({
+		id = null,
 		playerId,
 		pos,
-		color = "#4ade80",
 		angle = -Math.PI / 2,
+		hp = null,
+		color = "#4ade80",
 		maxHp = 100,
 		fireDelay = 0.25,
+		cooldown = 0,
+		thrusting = false,
 	}) {
-		super({ kind: "ship", pos, angle, radius: 22 });
+		super({ id, kind: "ship", pos, angle, radius: 22 });
 		this.playerId = playerId;
 		this.color = color;
 		this.maxHp = maxHp;
 		this.fireDelay = fireDelay;
-		this.cooldown = 0;
-		this.thrusting = false;
-		this.#hp = maxHp;
+		this.cooldown = cooldown;
+		this.thrusting = thrusting;
+		this.#hp = hp ?? maxHp;
 	}
 
 	get hp() {
@@ -84,6 +88,7 @@ export class Ship extends Entity {
 
 		const dir = Vector2.fromAngle(this.angle);
 		const bullet = new Bullet({
+			id: this.world.nextId(),
 			pos: this.pos.add(dir.scale(this.radius + 8)),
 			vel: this.vel.add(dir.scale(BULLET_SPEED)),
 			ownerId: this.playerId,

@@ -6,10 +6,16 @@ export class World {
 	#entities = new Map(); // id -> Entity
 	#snapshot = []; // reused buffer: entities spawned mid-step wait for next step
 	#events = [];
+	#nextId;
 
-	constructor({ rng, arena = ARENA }) {
+	constructor({ rng, arena = ARENA, idStart = 1 }) {
 		this.rng = rng;
 		this.arena = arena;
+		this.#nextId = idStart;
+	}
+
+	nextId() {
+		return this.#nextId++;
 	}
 
 	get size() {

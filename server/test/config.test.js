@@ -9,6 +9,9 @@ test("config uses safe defaults", () => {
 	assert.equal(config.joinTimeoutMs, 5000);
 	assert.equal(config.pingIntervalMs, 15000);
 	assert.equal(config.maxMissedPongs, 2);
+	assert.equal(config.tickRate, 30);
+	assert.equal(config.messagesPerSecond, 90);
+	assert.equal(config.dropRate, 0);
 	assert.ok(config.logDir.endsWith(".logs"));
 });
 
@@ -17,4 +20,6 @@ test("config rejects invalid values", () => {
 	assert.throws(() => loadConfig({ PORT: "abc" }), /PORT/);
 	assert.throws(() => loadConfig({ MAX_PAYLOAD: "12" }), /MAX_PAYLOAD/);
 	assert.throws(() => loadConfig({ LOG_DIR: "   " }), /LOG_DIR/);
+	assert.throws(() => loadConfig({ DROP_RATE: "1.5" }), /DROP_RATE/);
+	assert.throws(() => loadConfig({ TICK_RATE: "0" }), /TICK_RATE/);
 });

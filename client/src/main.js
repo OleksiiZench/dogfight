@@ -12,19 +12,16 @@ import { createInput } from "./input.js";
 import { createLoop } from "./loop.js";
 import { Connection } from "./net/connection.js";
 import { Lobby } from "./net/lobby.js";
+import { MatchView } from "./net/match.js";
 import { setupCanvas } from "./render/canvas.js";
 import {
-	DRAW_ORDER,
 	drawArena,
-	drawEntity,
 	drawHud,
+	drawNetgraph,
 	drawScoreboard,
 } from "./render/draw.js";
 import { createSprites } from "./render/sprites.js";
-import { createBot } from "./sim/bot.js";
-import { Game } from "./sim/game.js";
 import { createChatPanel } from "./ui/chatView.js";
-import { createHud } from "./ui/hud.js";
 import { createLoadingScreen } from "./ui/loading.js";
 import { createLobbyView } from "./ui/lobbyView.js";
 
@@ -36,7 +33,6 @@ const input = createInput(window);
 const bus = createBus();
 const audio = createAudio();
 const connection = new Connection();
-const hud = createHud(bus);
 attachAudio(bus, audio);
 
 let bootController = null;
@@ -157,13 +153,13 @@ function showLobby(roomsUrl, assets) {
 		lobby.detach();
 		lobbyView?.destroy();
 		lobbyView = null;
-		startGame(detail.room, detail.name, assets);
+		startGame(detail.room, detail.name, assets, detail.player?.id);
 	});
 
 	lobby.start();
 }
 
-function startGame(room, pilotName, assets) {
+function startGame(room, pilotName, assets, localId = "p1") {
 	const gameChat = createChatPanel({
 		mount: document.body,
 		connection,
@@ -171,65 +167,83 @@ function startGame(room, pilotName, assets) {
 		variant: "game-chat",
 	});
 	gameChat.append(`[система] кімната ${room.id}, пілот ${pilotName}`);
-	const game = new Game({
-		seed: room.seed ?? 1,
-		arena: room.arena ?? assets.arena ?? undefined,
-		asteroidTarget: room.asteroidTarget,
-		bus,
-	});
-	game.addPlayer({
-		id: "p1",
-		name: pilotName,
-		color: "#4ade80",
-		controller: () => keyboardIntent(input),
-	});
-	game.addPlayer({
-		id: "bot",
-		name: "BOT",
-		color: "#f87171",
-		controller: createBot(game, "bot"),
-		fireDelay: 0.7,
-	});
-	game.start();
 
-	const me = () => game.players.get("p1");
-
-	// Mouse fire. `?naive=1` passes the METHOD itself: the browser then calls it
-	// with this = canvas, and Ship.fire() throws (see README, "The this bug").
-	// Default: an arrow function keeps the call `ship.fire()` at the call site,
-	// and looks the ship up at click time (the ship object changes on respawn).
-	const onPointerDown =
-		params.get("naive") === "1" ? me().ship.fire : () => me().ship?.fire();
+	const matchView = new MatchView({
+		arena: room.arena ?? assets.arena,
+		interpolationDelayMs: Number(params.get("interp") ?? 66),
+	});
+	let pointerFire = false;
+	const onPointerDown = () => {
+		pointerFire = true;
+		setTimeout(() => {
+			pointerFire = false;
+		}, 120);
+	};
+	const onKeyDown = (event) => {
+		if (event.code !== "BracketLeft" && event.code !== "BracketRight") return;
+		const next =
+			matchView.interpolationDelayMs +
+			(event.code === "BracketRight" ? 16 : -16);
+		matchView.setInterpolationDelay(next);
+		gameChat.append(
+			`[мережа] інтерполяція ${matchView.interpolationDelayMs} мс`,
+		);
+	};
 	canvas.addEventListener("pointerdown", onPointerDown);
+	window.addEventListener("keydown", onKeyDown);
 
-	function simulate(dt) {
-		game.step(dt);
+	const onSnapshot = (event) => matchView.applySnapshot(event.detail);
+	const onNetState = (event) => {
+		const { latencyMs, jitterMs, dropRate } = event.detail.net;
+		gameChat.append(
+			`[мережа] затримка ${latencyMs} мс · джиттер ${jitterMs} мс · втрати ${(dropRate * 100).toFixed(1)}%`,
+		);
+	};
+	connection.addEventListener("snapshot", onSnapshot);
+	connection.addEventListener("netState", onNetState);
+
+	function simulate() {
+		const intent = keyboardIntent(input);
+		if (pointerFire) intent.fire = true;
+		connection.sendInput(intent);
 		input.endStep();
 	}
 
 	function render(alpha) {
+		const age = connection.stats.lastSnapshotAt
+			? performance.now() - connection.stats.lastSnapshotAt
+			: 0;
+		const stats = {
+			...connection.stats,
+			snapshotAgeMs: age,
+			interpolationDelayMs: matchView.interpolationDelayMs,
+			tick: matchView.tick,
+		};
 		ctx.clearRect(0, 0, view.width, view.height);
 
 		const scale = Math.min(
-			view.width / game.arena.width,
-			view.height / game.arena.height,
+			view.width / matchView.arena.width,
+			view.height / matchView.arena.height,
 		);
 		ctx.save();
 		ctx.translate(
-			(view.width - game.arena.width * scale) / 2,
-			(view.height - game.arena.height * scale) / 2,
+			(view.width - matchView.arena.width * scale) / 2,
+			(view.height - matchView.arena.height * scale) / 2,
 		);
 		ctx.scale(scale, scale);
-		drawArena(ctx, game.arena);
-		for (const kind of DRAW_ORDER) {
-			for (const entity of game.world.ofKind(kind)) {
-				drawEntity(ctx, entity, alpha, assets.sprites);
-			}
-		}
+		drawArena(ctx, matchView.arena);
+		matchView.draw(ctx, alpha, assets.sprites);
 		ctx.restore();
 
-		drawScoreboard(ctx, game, view, "p1", hud.scores);
+		drawScoreboard(
+			ctx,
+			{ players: matchView.players, arena: matchView.arena },
+			view,
+			localId,
+			matchView.scores,
+		);
 		drawHud(ctx, loop.stats);
+		drawNetgraph(ctx, view, stats);
 	}
 
 	const loop = createLoop({ simulate, render });

@@ -1,4 +1,4 @@
-import { normalizeAngle } from "../math.js";
+import { normalizeAngle } from "shared/math.js";
 
 const IDLE = Object.freeze({ turn: 0, thrust: false, fire: false });
 

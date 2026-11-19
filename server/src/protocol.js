@@ -1,3 +1,5 @@
+import { validateInput } from "shared/protocol/input.js";
+
 export const PROTOCOL_VERSION = 1;
 
 export const CLOSE = {
@@ -87,6 +89,41 @@ export function decodeClientMessage(raw, options = {}) {
 				type: "chat",
 				text: boundedText(value.text, "text", chatMaxLength),
 			};
+		case "input":
+			try {
+				return validateInput(value);
+			} catch (error) {
+				throw new ProtocolError(CLOSE.INVALID_MESSAGE, error.message);
+			}
+		case "ping": {
+			const sent = Number(value.t);
+			if (!Number.isFinite(sent)) {
+				throw new ProtocolError(CLOSE.INVALID_MESSAGE, "ping needs t");
+			}
+			return { type: "ping", t: sent };
+		}
+		case "net": {
+			const latencyMs = Number(value.latencyMs ?? 0);
+			const jitterMs = Number(value.jitterMs ?? 0);
+			const dropRate = Number(value.dropRate ?? 0);
+			if (
+				!Number.isFinite(latencyMs) ||
+				!Number.isFinite(jitterMs) ||
+				!Number.isFinite(dropRate) ||
+				latencyMs < 0 ||
+				latencyMs > 2000 ||
+				jitterMs < 0 ||
+				jitterMs > 2000 ||
+				dropRate < 0 ||
+				dropRate > 1
+			) {
+				throw new ProtocolError(
+					CLOSE.INVALID_MESSAGE,
+					"invalid network simulation settings",
+				);
+			}
+			return { type: "net", latencyMs, jitterMs, dropRate };
+		}
 		case "leave":
 			return { type: "leave" };
 		default:

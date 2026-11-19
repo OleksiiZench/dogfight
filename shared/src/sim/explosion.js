@@ -4,24 +4,28 @@ import { Vector2 } from "./vector.js";
 // One entity that owns many short-lived particles (plain objects).
 export class Explosion extends Entity {
 	constructor({
+		id = null,
 		pos,
 		rng,
 		color = "#fb923c",
 		count = 24,
 		speed = 220,
 		life = 0.8,
+		particles = null,
 	}) {
-		super({ kind: "explosion", pos, radius: 0, solid: false });
+		super({ id, kind: "explosion", pos, radius: 0, solid: false });
 		this.color = color;
 		this.life = life;
-		this.particles = Array.from({ length: count }, () => ({
-			pos,
-			vel: Vector2.fromAngle(
-				rng.range(0, Math.PI * 2),
-				rng.range(speed * 0.2, speed),
-			),
-			ttl: rng.range(life * 0.5, life),
-		}));
+		this.particles =
+			particles ??
+			Array.from({ length: count }, () => ({
+				pos,
+				vel: Vector2.fromAngle(
+					rng.range(0, Math.PI * 2),
+					rng.range(speed * 0.2, speed),
+				),
+				ttl: rng.range(life * 0.5, life),
+			}));
 	}
 
 	update(dt) {

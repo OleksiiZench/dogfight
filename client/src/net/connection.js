@@ -2,7 +2,21 @@ import { dispatch } from "../events/bus.js";
 
 export function defaultSocketUrl() {
 	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-	return `${protocol}//${window.location.host}/ws`;
+	return `${protocol}//${window.location.host}/ws${window.location.search}`;
+}
+
+function encode(message) {
+	return JSON.stringify({ v: 1, ...message });
+}
+
+function decode(data) {
+	return JSON.parse(data);
+}
+
+function byteLength(data) {
+	if (typeof data === "string")
+		return new TextEncoder().encode(data).byteLength;
+	return data?.byteLength ?? data?.length ?? 0;
 }
 
 export class Connection extends EventTarget {
@@ -21,7 +35,23 @@ export class Connection extends EventTarget {
 		this.roomId = null;
 		this.attempt = 0;
 		this.timer = null;
+		this.pingTimer = null;
 		this.intentional = false;
+		this.seq = 0;
+		this.rateWindow = { at: performance.now(), bytesIn: 0, bytesOut: 0 };
+		this.stats = {
+			rttMs: 0,
+			bytesIn: 0,
+			bytesOut: 0,
+			bytesInPerSec: 0,
+			bytesOutPerSec: 0,
+			snapshots: 0,
+			lastSnapshotAt: 0,
+			snapshotAgeMs: 0,
+			pendingInputs: 0,
+			correction: 0,
+			interpolationDelayMs: 66,
+		};
 	}
 
 	connect() {
@@ -37,6 +67,7 @@ export class Connection extends EventTarget {
 
 	open() {
 		const socket = new WebSocket(this.url);
+		socket.binaryType = "arraybuffer";
 		this.socket = socket;
 		dispatch(this, "connecting", { attempt: this.attempt });
 
@@ -45,11 +76,9 @@ export class Connection extends EventTarget {
 			dispatch(this, "open");
 			const queued = this.queue.splice(0);
 			for (const payload of queued) socket.send(payload);
-			if (this.joinRequest) {
-				socket.send(
-					JSON.stringify({ v: 1, type: "join", ...this.joinRequest }),
-				);
-			}
+			if (this.joinRequest)
+				socket.send(encode({ type: "join", ...this.joinRequest }));
+			this.startPings();
 		});
 
 		socket.addEventListener("message", (event) => this.onMessage(event));
@@ -57,6 +86,7 @@ export class Connection extends EventTarget {
 			dispatch(this, "error", { message: "socket error" }),
 		);
 		socket.addEventListener("close", (event) => {
+			this.stopPings();
 			if (this.socket === socket) this.socket = null;
 			dispatch(this, "closed", {
 				code: event.code,
@@ -65,6 +95,31 @@ export class Connection extends EventTarget {
 			});
 			if (!this.intentional) this.scheduleReconnect();
 		});
+	}
+
+	startPings() {
+		this.stopPings();
+		this.pingTimer = setInterval(() => {
+			const now = performance.now();
+			const seconds = (now - this.rateWindow.at) / 1000;
+			if (seconds > 0) {
+				this.stats.bytesInPerSec =
+					(this.stats.bytesIn - this.rateWindow.bytesIn) / seconds;
+				this.stats.bytesOutPerSec =
+					(this.stats.bytesOut - this.rateWindow.bytesOut) / seconds;
+			}
+			this.rateWindow = {
+				at: now,
+				bytesIn: this.stats.bytesIn,
+				bytesOut: this.stats.bytesOut,
+			};
+			this.send({ type: "ping", t: performance.now() }, { queue: false });
+		}, 1000);
+	}
+
+	stopPings() {
+		if (this.pingTimer) clearInterval(this.pingTimer);
+		this.pingTimer = null;
 	}
 
 	scheduleReconnect() {
@@ -81,12 +136,33 @@ export class Connection extends EventTarget {
 	}
 
 	rawSend(message) {
-		this.socket?.send(JSON.stringify({ v: 1, ...message }));
+		const payload = encode(message);
+		this.stats.bytesOut += byteLength(payload);
+		this.socket?.send(payload);
 	}
 
-	send(message) {
-		if (this.socket?.readyState === WebSocket.OPEN) this.rawSend(message);
-		else this.queue.push(JSON.stringify({ v: 1, ...message }));
+	send(message, { queue = true } = {}) {
+		if (this.socket?.readyState === WebSocket.OPEN) {
+			this.rawSend(message);
+		} else if (queue) {
+			this.queue.push(encode({ v: 1, ...message }));
+		}
+	}
+
+	sendInput(intent) {
+		this.seq += 1;
+		this.stats.pendingInputs += 1;
+		this.send(
+			{
+				type: "input",
+				seq: this.seq,
+				tick: this.lastTick ?? 0,
+				turn: intent.turn,
+				thrust: intent.thrust,
+				fire: intent.fire,
+			},
+			{ queue: false },
+		);
 	}
 
 	join(room, name) {
@@ -104,6 +180,16 @@ export class Connection extends EventTarget {
 	}
 
 	chat(text) {
+		const net = text.match(/^\/net\s+(\d+)\s+(\d+)\s+([0-9.]+)$/);
+		if (net) {
+			this.send({
+				type: "net",
+				latencyMs: Number(net[1]),
+				jitterMs: Number(net[2]),
+				dropRate: Number(net[3]),
+			});
+			return;
+		}
 		if (!this.roomId) {
 			dispatch(this, "notice", { message: "Спочатку приєднайтеся до кімнати" });
 			return;
@@ -113,6 +199,7 @@ export class Connection extends EventTarget {
 
 	close() {
 		this.intentional = true;
+		this.stopPings();
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = null;
 		if (this.socket?.readyState === WebSocket.OPEN) {
@@ -122,8 +209,21 @@ export class Connection extends EventTarget {
 
 	onMessage(event) {
 		try {
-			const message = JSON.parse(event.data);
+			this.stats.bytesIn += byteLength(event.data);
+			const message = decode(event.data);
 			if (!message || typeof message !== "object") return;
+			this.lastTick = message.tick ?? this.lastTick;
+			if (message.type === "snapshot") {
+				this.stats.snapshots += 1;
+				this.stats.lastSnapshotAt = performance.now();
+				this.stats.pendingInputs = Math.max(
+					0,
+					this.seq - Number(message.lastProcessedSeq ?? this.seq),
+				);
+			}
+			if (message.type === "pong") {
+				this.stats.rttMs = performance.now() - Number(message.t);
+			}
 			dispatch(this, message.type ?? "notice", message);
 		} catch {
 			dispatch(this, "notice", { message: "некоректна відповідь сервера" });

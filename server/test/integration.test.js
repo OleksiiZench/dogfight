@@ -76,6 +76,11 @@ test("http, rooms, chat and replay work together", async (t) => {
 	);
 	assert.equal(health.ok, true);
 	assert.equal(health.rooms, 3);
+	const stats = await fetch(`${base}/api/stats`).then((response) =>
+		response.json(),
+	);
+	assert.equal(stats.matches.length, 3);
+	assert.equal(stats.matches[0].tickRate, 30);
 	const rooms = await fetch(`${base}/api/rooms`).then((response) =>
 		response.json(),
 	);
@@ -99,6 +104,24 @@ test("http, rooms, chat and replay work together", async (t) => {
 		"Alpha",
 		"Beta",
 	]);
+
+	alpha.ws.send(
+		JSON.stringify({
+			v: 1,
+			type: "input",
+			seq: 1,
+			tick: 1,
+			turn: 0,
+			thrust: true,
+			fire: false,
+		}),
+	);
+	const snapshot = await waitFor(
+		alpha,
+		(message) => message.type === "snapshot" && message.lastProcessedSeq >= 1,
+	);
+	assert.ok(snapshot.tick > 0);
+	assert.ok(snapshot.entities.some((entity) => entity.kind === "ship"));
 
 	alpha.ws.send(
 		JSON.stringify({ v: 1, type: "chat", text: "hello from lab 04" }),

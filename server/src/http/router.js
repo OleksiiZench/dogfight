@@ -50,7 +50,14 @@ function busyWait(milliseconds) {
 }
 
 export async function handleApi(req, res, url, context) {
-	const { config, rooms, startedAt, gameServer, logCount = 0 } = context;
+	const {
+		config,
+		rooms,
+		startedAt,
+		gameServer,
+		matches = new Map(),
+		logCount = 0,
+	} = context;
 
 	if (url.pathname === "/health") {
 		if (req.method !== "GET") methodNotAllowed(res, "GET");
@@ -62,6 +69,15 @@ export async function handleApi(req, res, url, context) {
 			wsClients: gameServer?.clients.size ?? 0,
 			droppedMessages: gameServer?.stats.droppedMessages ?? 0,
 			activeLogs: logCount,
+		});
+		return true;
+	}
+
+	if (url.pathname === "/api/stats") {
+		if (req.method !== "GET") methodNotAllowed(res, "GET");
+		sendJson(res, 200, {
+			net: gameServer?.latency.settings ?? null,
+			matches: [...matches.values()].map((match) => match.getStats()),
 		});
 		return true;
 	}

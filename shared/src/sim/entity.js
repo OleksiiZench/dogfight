@@ -4,9 +4,10 @@ import { Vector2 } from "./vector.js";
 
 export class Entity {
 	static #nextId = 1;
-	#id = Entity.#nextId++;
+	#id;
 
 	constructor({
+		id = null,
 		kind,
 		pos = new Vector2(),
 		vel = new Vector2(),
@@ -14,6 +15,7 @@ export class Entity {
 		radius = 10,
 		solid = true,
 	}) {
+		this.#id = id ?? Entity.#nextId++;
 		this.kind = kind;
 		this.pos = pos;
 		this.prevPos = pos;
@@ -75,9 +77,10 @@ export class Entity {
 
 	// interpolated position for rendering (alpha in [0, 1))
 	renderPos(alpha) {
+		const arena = this.world?.arena ?? ARENA;
 		const jumped =
-			Math.abs(this.pos.x - this.prevPos.x) > ARENA.width / 2 ||
-			Math.abs(this.pos.y - this.prevPos.y) > ARENA.height / 2;
+			Math.abs(this.pos.x - this.prevPos.x) > arena.width / 2 ||
+			Math.abs(this.pos.y - this.prevPos.y) > arena.height / 2;
 		// teleported across the arena edge: do not blend across the screen
 		if (jumped) return this.pos;
 		return new Vector2(

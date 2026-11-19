@@ -4,7 +4,14 @@ import { Explosion } from "./explosion.js";
 const ASTEROID_DAMAGE = 25;
 
 function explode(world, entity, options) {
-	world.spawn(new Explosion({ pos: entity.pos, rng: world.rng, ...options }));
+	world.spawn(
+		new Explosion({
+			id: world.nextId(),
+			pos: entity.pos,
+			rng: world.rng,
+			...options,
+		}),
+	);
 }
 
 function bulletHitsShip(bullet, ship, world) {

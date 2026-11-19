@@ -15,6 +15,19 @@ function number(name, raw, { fallback, min, max }) {
 	return value;
 }
 
+function decimal(name, raw, { fallback, min, max }) {
+	const value = raw === undefined || raw === "" ? fallback : Number(raw);
+	if (!Number.isFinite(value)) {
+		throw new Error(`${name} has to be a number, got ${JSON.stringify(raw)}`);
+	}
+	if (value < min || value > max) {
+		throw new Error(
+			`${name} has to be between ${min} and ${max}, got ${value}`,
+		);
+	}
+	return value;
+}
+
 function text(name, raw, fallback) {
 	const value = raw === undefined || raw === "" ? fallback : String(raw).trim();
 	if (!value) throw new Error(`${name} cannot be empty`);
@@ -48,10 +61,35 @@ export function loadConfig(env = process.env) {
 			max: 1024 * 1024,
 		}),
 		messagesPerSecond: number("MESSAGES_PER_SECOND", env.MESSAGES_PER_SECOND, {
-			fallback: 20,
+			fallback: 90,
 			min: 1,
 			max: 1000,
 		}),
+		tickRate: number("TICK_RATE", env.TICK_RATE, {
+			fallback: 30,
+			min: 1,
+			max: 120,
+		}),
+		latencyMs: number("LATENCY_MS", env.LATENCY_MS, {
+			fallback: 0,
+			min: 0,
+			max: 2000,
+		}),
+		jitterMs: number("JITTER_MS", env.JITTER_MS, {
+			fallback: 0,
+			min: 0,
+			max: 2000,
+		}),
+		dropRate: decimal("DROP_RATE", env.DROP_RATE, {
+			fallback: 0,
+			min: 0,
+			max: 1,
+		}),
+		interpolationDelayMs: number(
+			"INTERPOLATION_DELAY_MS",
+			env.INTERPOLATION_DELAY_MS,
+			{ fallback: 66, min: 0, max: 1000 },
+		),
 		joinTimeoutMs: number("JOIN_TIMEOUT_MS", env.JOIN_TIMEOUT_MS, {
 			fallback: 5000,
 			min: 100,

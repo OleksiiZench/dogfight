@@ -1,5 +1,5 @@
-import { EFFECTS } from "../sim/behaviors.js";
-import { RESPAWN_DELAY } from "../sim/game.js";
+import { EFFECTS } from "shared/sim/behaviors.js";
+import { RESPAWN_DELAY } from "shared/sim/game.js";
 import { drawSprite } from "./sprites.js";
 
 export function drawArena(ctx, arena) {
@@ -228,6 +228,27 @@ export function drawHud(ctx, stats) {
 	ctx.textBaseline = "top";
 	lines.forEach((text, i) => {
 		ctx.fillText(text, 12, 12 + i * 18);
+	});
+	ctx.restore();
+}
+
+export function drawNetgraph(ctx, view, stats) {
+	const lines = [
+		`rtt:       ${stats.rttMs.toFixed(0)} ms`,
+		`snap age:  ${stats.snapshotAgeMs.toFixed(0)} ms`,
+		`down/up:   ${(stats.bytesInPerSec / 1024).toFixed(1)}/${(stats.bytesOutPerSec / 1024).toFixed(1)} KB/s`,
+		`pending:   ${stats.pendingInputs}`,
+		`correction:${stats.correction.toFixed(1)} px`,
+		`interp:    ${stats.interpolationDelayMs.toFixed(0)} ms`,
+		`tick:      ${stats.tick ?? 0}`,
+	];
+
+	ctx.save();
+	ctx.fillStyle = "#38bdf8";
+	ctx.font = "13px monospace";
+	ctx.textBaseline = "bottom";
+	lines.forEach((text, i) => {
+		ctx.fillText(text, 12, view.height - 32 - (lines.length - 1 - i) * 17);
 	});
 	ctx.restore();
 }

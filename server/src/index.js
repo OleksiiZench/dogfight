@@ -6,6 +6,7 @@ import { loadConfig } from "./config.js";
 import { HttpError, handleApi, sendJson } from "./http/router.js";
 import { serveStatic } from "./http/static.js";
 import { attachMatchLog } from "./log/matchlog.js";
+import { Match } from "./match.js";
 import { RoomManager } from "./rooms.js";
 import { attachWebSocket } from "./ws.js";
 
@@ -32,25 +33,50 @@ export async function createApp(config = loadConfig()) {
 		socket.on("error", (error) => console.error("[socket]", error.message));
 	});
 
-	const gameServer = attachWebSocket(server, { config, rooms });
-	closeHooks.push(() => gameServer.close());
-
 	const logs = new Map();
+	const matches = new Map();
+
 	function attachLog(room) {
 		const log = attachMatchLog(room, config);
 		logs.set(room.id, log);
 	}
-	for (const room of rooms.rooms.values()) attachLog(room);
-	rooms.on("created", attachLog);
+
+	function attachMatch(room) {
+		const match = new Match(room, { tickRate: config.tickRate });
+		room.match = match;
+		matches.set(room.id, match);
+		match.start();
+	}
+
+	for (const room of rooms.rooms.values()) {
+		attachLog(room);
+		attachMatch(room);
+	}
+	rooms.on("created", (room) => {
+		attachLog(room);
+		attachMatch(room);
+	});
 	rooms.on("removed", (room) => {
+		const match = matches.get(room.id);
+		if (match) {
+			match.close();
+			matches.delete(room.id);
+		}
 		const log = logs.get(room.id);
 		if (!log) return;
 		void log.close().finally(() => logs.delete(room.id));
 	});
 	closeHooks.push(async () => {
+		for (const match of matches.values()) match.close();
+		matches.clear();
+	});
+	closeHooks.push(async () => {
 		await Promise.all([...logs.values()].map((log) => log.close()));
 		logs.clear();
 	});
+
+	const gameServer = attachWebSocket(server, { config, rooms });
+	closeHooks.push(() => gameServer.close());
 
 	async function handleRequest(req, res) {
 		if (closing) {
@@ -65,6 +91,7 @@ export async function createApp(config = loadConfig()) {
 					rooms,
 					startedAt,
 					gameServer,
+					matches,
 					logCount: logs.size,
 				});
 				if (!handled) sendJson(res, 404, { error: "unknown endpoint" });
@@ -117,6 +144,7 @@ export async function createApp(config = loadConfig()) {
 	return {
 		config,
 		rooms,
+		matches,
 		server,
 		sockets,
 		gameServer,

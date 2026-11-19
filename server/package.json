@@ -9,6 +9,7 @@
 		"test": "node --test"
 	},
 	"dependencies": {
+		"shared": "file:../shared",
 		"ws": "^8.23.0"
 	},
 	"engines": {
