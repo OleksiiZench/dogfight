@@ -1,4 +1,10 @@
-export function createLoop({ step = 1 / 60, simulate, render }) {
+export function createLoop({
+	step = 1 / 60,
+	simulate,
+	render,
+	scheduler = "raf",
+	fixed = true,
+}) {
 	const stats = {
 		stepsPerSecond: 0,
 		framesPerSecond: 0,
@@ -8,11 +14,16 @@ export function createLoop({ step = 1 / 60, simulate, render }) {
 
 	let running = false;
 	let rafId = 0;
+	let intervalId = 0;
 	let last = null;
 	let accumulator = 0;
 	let stepCount = 0;
 	let frameCount = 0;
 	let windowStart = 0;
+
+	function schedule() {
+		if (scheduler === "raf") rafId = requestAnimationFrame(frame);
+	}
 
 	function frame(now) {
 		if (!running) return;
@@ -20,7 +31,7 @@ export function createLoop({ step = 1 / 60, simulate, render }) {
 		if (last === null) {
 			last = now;
 			windowStart = now;
-			rafId = requestAnimationFrame(frame);
+			schedule();
 			return;
 		}
 
@@ -29,17 +40,23 @@ export function createLoop({ step = 1 / 60, simulate, render }) {
 		stats.frameTime = rawDelta;
 
 		// clamp: after a long hitch, do not try to catch up forever
-		accumulator += Math.min(rawDelta / 1000, 0.25);
-
+		const delta = Math.min(rawDelta / 1000, 0.25);
 		const workStart = performance.now();
 
-		while (accumulator >= step) {
-			simulate(step);
-			accumulator -= step;
+		if (fixed) {
+			accumulator += delta;
+			while (accumulator >= step) {
+				simulate(step);
+				accumulator -= step;
+				stepCount++;
+			}
+			render(accumulator / step);
+		} else {
+			// experiment 3 only: variable timestep
+			simulate(delta);
 			stepCount++;
+			render(1);
 		}
-
-		render(accumulator / step);
 
 		stats.workTime = performance.now() - workStart;
 		frameCount++;
@@ -53,7 +70,7 @@ export function createLoop({ step = 1 / 60, simulate, render }) {
 			windowStart = now;
 		}
 
-		rafId = requestAnimationFrame(frame);
+		schedule();
 	}
 
 	function start() {
@@ -61,12 +78,18 @@ export function createLoop({ step = 1 / 60, simulate, render }) {
 		running = true;
 		last = null;
 		accumulator = 0;
-		rafId = requestAnimationFrame(frame);
+		if (scheduler === "interval") {
+			// experiment 2 only
+			intervalId = setInterval(() => frame(performance.now()), 16);
+		} else {
+			schedule();
+		}
 	}
 
 	function stop() {
 		running = false;
 		cancelAnimationFrame(rafId);
+		clearInterval(intervalId);
 	}
 
 	return { start, stop, stats };

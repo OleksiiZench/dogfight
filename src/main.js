@@ -1,4 +1,10 @@
 import "./style.css";
+import {
+	busyWait,
+	createAutoInput,
+	createRecorder,
+	readParams,
+} from "./experiments.js";
 import { createInput } from "./input.js";
 import { createLoop } from "./loop.js";
 import { lerp, lerpAngle } from "./math.js";
@@ -7,17 +13,36 @@ import { drawArena, drawHud, drawShip } from "./render/draw.js";
 import { ARENA, wrapShip } from "./sim/arena.js";
 import { createShip, integrate } from "./sim/ship.js";
 
+const params = readParams();
+console.log("params", params);
+
 const canvas = document.getElementById("game");
 const { ctx, view } = setupCanvas(canvas);
-const input = createInput(window);
+const input = params.auto ? createAutoInput() : createInput(window);
+const recorder = params.measure ? createRecorder(10) : null;
 
 let previous = createShip(ARENA.width / 2, ARENA.height / 2);
 let current = previous;
+let simTime = 0;
+let traced = false;
+let frames = 0;
 
 function simulate(dt) {
 	previous = current;
 	current = wrapShip(integrate(current, input, dt), ARENA);
 	input.endStep();
+
+	if (params.auto && !traced) {
+		simTime += dt;
+		if (simTime >= 5) {
+			traced = true;
+			console.log("[trace after 5 s of thrust]", {
+				x: +current.x.toFixed(4),
+				y: +current.y.toFixed(4),
+				simTime: +simTime.toFixed(4),
+			});
+		}
+	}
 }
 
 function interpolate(from, to, alpha) {
@@ -35,27 +60,32 @@ function interpolate(from, to, alpha) {
 	};
 }
 
+function render(alpha) {
+	frames++;
+	if (params.busy && frames % 60 === 0) busyWait(100);
+	recorder?.(loop.stats.frameTime);
+
+	ctx.clearRect(0, 0, view.width, view.height);
+
+	const scale = Math.min(view.width / ARENA.width, view.height / ARENA.height);
+	ctx.save();
+	ctx.translate(
+		(view.width - ARENA.width * scale) / 2,
+		(view.height - ARENA.height * scale) / 2,
+	);
+	ctx.scale(scale, scale);
+	drawArena(ctx, ARENA);
+	drawShip(ctx, interpolate(previous, current, alpha));
+	ctx.restore();
+
+	drawHud(ctx, loop.stats);
+}
+
 const loop = createLoop({
 	simulate,
-	render(alpha) {
-		ctx.clearRect(0, 0, view.width, view.height);
-
-		const scale = Math.min(
-			view.width / ARENA.width,
-			view.height / ARENA.height,
-		);
-		ctx.save();
-		ctx.translate(
-			(view.width - ARENA.width * scale) / 2,
-			(view.height - ARENA.height * scale) / 2,
-		);
-		ctx.scale(scale, scale);
-		drawArena(ctx, ARENA);
-		drawShip(ctx, interpolate(previous, current, alpha));
-		ctx.restore();
-
-		drawHud(ctx, loop.stats);
-	},
+	render,
+	scheduler: params.scheduler,
+	fixed: params.fixed,
 });
 
 loop.start();
