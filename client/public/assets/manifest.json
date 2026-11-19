@@ -9,5 +9,5 @@
 		"pickup": "/assets/pickup.wav"
 	},
 	"arena": "/assets/arena.json",
-	"rooms": "/api/rooms.json"
+	"rooms": "/api/rooms"
 }

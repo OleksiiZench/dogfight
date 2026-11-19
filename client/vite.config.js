@@ -46,4 +46,14 @@ const debugAssets = {
 	},
 };
 
-export default defineConfig({ plugins: [debugAssets] });
+const serverPort = process.env.PORT ?? "3001";
+const proxy = {
+	"/api": `http://127.0.0.1:${serverPort}`,
+	"/ws": { target: `ws://127.0.0.1:${serverPort}`, ws: true },
+};
+
+export default defineConfig({
+	plugins: [debugAssets],
+	server: { proxy },
+	preview: { proxy },
+});

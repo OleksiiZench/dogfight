@@ -1,0 +1,26 @@
+[
+	{
+		"id": "training",
+		"name": "Тренувальний полігон",
+		"seed": 1,
+		"arena": { "width": 1600, "height": 900 },
+		"asteroidTarget": 4,
+		"capacity": 8
+	},
+	{
+		"id": "dogfight",
+		"name": "Dogfight",
+		"seed": 7,
+		"arena": { "width": 2000, "height": 1100 },
+		"asteroidTarget": 7,
+		"capacity": 8
+	},
+	{
+		"id": "tiny",
+		"name": "Тісна арена",
+		"seed": 42,
+		"arena": { "width": 1200, "height": 700 },
+		"asteroidTarget": 3,
+		"capacity": 8
+	}
+]
