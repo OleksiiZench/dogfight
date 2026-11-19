@@ -12,6 +12,7 @@ export class MatchView extends EventTarget {
 		this.scores = new Map();
 		this.lastEntityData = new Map();
 		this.history = [];
+		this.excludeId = null;
 	}
 
 	applySnapshot(snapshot) {
@@ -44,9 +45,17 @@ export class MatchView extends EventTarget {
 		this.interpolationDelayMs = Math.max(0, Math.min(500, ms));
 	}
 
+	shipOf(playerId) {
+		for (const entity of this.entities.values()) {
+			if (entity.kind === "ship" && entity.playerId === playerId) return entity;
+		}
+		return null;
+	}
+
 	draw(ctx, alpha, sprites) {
 		for (const kind of DRAW_ORDER) {
 			for (const entity of this.entities.values()) {
+				if (entity.id === this.excludeId) continue;
 				if (entity.kind === kind) drawEntity(ctx, entity, alpha, sprites);
 			}
 		}

@@ -160,7 +160,11 @@ export function attachWebSocket(server, { config, rooms }) {
 			const message = decodeClientMessage(data, config);
 
 			if (message.type === "ping") {
-				send(socket, { type: "pong", t: message.t, serverTime: Date.now() });
+				send(
+					socket,
+					{ type: "pong", t: message.t, serverTime: Date.now() },
+					{ delayed: true },
+				);
 				return;
 			}
 
@@ -283,7 +287,7 @@ export function attachWebSocket(server, { config, rooms }) {
 				stats.droppedPackets += 1;
 				return;
 			}
-			if (hint === "ping" || hint === "join" || hint === "net") {
+			if (hint === "join" || hint === "net") {
 				onMessage(socket, state, data, isBinary);
 				return;
 			}

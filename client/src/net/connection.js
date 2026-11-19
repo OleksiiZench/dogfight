@@ -38,6 +38,7 @@ export class Connection extends EventTarget {
 		this.pingTimer = null;
 		this.intentional = false;
 		this.seq = 0;
+		this.tickRate = 30;
 		this.rateWindow = { at: performance.now(), bytesIn: 0, bytesOut: 0 };
 		this.stats = {
 			rttMs: 0,
@@ -149,14 +150,13 @@ export class Connection extends EventTarget {
 		}
 	}
 
-	sendInput(intent) {
-		this.seq += 1;
-		this.stats.pendingInputs += 1;
+	sendInput(intent, { seq = ++this.seq, tick = this.tick } = {}) {
+		this.seq = Math.max(this.seq, seq);
 		this.send(
 			{
 				type: "input",
-				seq: this.seq,
-				tick: this.lastTick ?? 0,
+				seq,
+				tick,
 				turn: intent.turn,
 				thrust: intent.thrust,
 				fire: intent.fire,
@@ -213,13 +213,12 @@ export class Connection extends EventTarget {
 			const message = decode(event.data);
 			if (!message || typeof message !== "object") return;
 			this.lastTick = message.tick ?? this.lastTick;
+			if (message.type === "hello" || message.type === "welcome") {
+				this.tickRate = Number(message.tickRate) || this.tickRate;
+			}
 			if (message.type === "snapshot") {
 				this.stats.snapshots += 1;
 				this.stats.lastSnapshotAt = performance.now();
-				this.stats.pendingInputs = Math.max(
-					0,
-					this.seq - Number(message.lastProcessedSeq ?? this.seq),
-				);
 			}
 			if (message.type === "pong") {
 				this.stats.rttMs = performance.now() - Number(message.t);

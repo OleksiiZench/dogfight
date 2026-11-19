@@ -13,6 +13,7 @@ import { createLoop } from "./loop.js";
 import { Connection } from "./net/connection.js";
 import { Lobby } from "./net/lobby.js";
 import { MatchView } from "./net/match.js";
+import { Predictor } from "./net/predictor.js";
 import { setupCanvas } from "./render/canvas.js";
 import {
 	drawArena,
@@ -172,6 +173,11 @@ function startGame(room, pilotName, assets, localId = "p1") {
 		arena: room.arena ?? assets.arena,
 		interpolationDelayMs: Number(params.get("interp") ?? 66),
 	});
+	const predictor = new Predictor({
+		arena: room.arena ?? assets.arena,
+		localId,
+		stepSeconds: 1 / connection.tickRate,
+	});
 	let pointerFire = false;
 	const onPointerDown = () => {
 		pointerFire = true;
@@ -192,7 +198,11 @@ function startGame(room, pilotName, assets, localId = "p1") {
 	canvas.addEventListener("pointerdown", onPointerDown);
 	window.addEventListener("keydown", onKeyDown);
 
-	const onSnapshot = (event) => matchView.applySnapshot(event.detail);
+	const onSnapshot = (event) => {
+		if (!matchView.applySnapshot(event.detail)) return;
+		predictor.reconcile(event.detail, connection);
+		matchView.excludeId = predictor.shipId;
+	};
 	const onNetState = (event) => {
 		const { latencyMs, jitterMs, dropRate } = event.detail.net;
 		gameChat.append(
@@ -202,14 +212,17 @@ function startGame(room, pilotName, assets, localId = "p1") {
 	connection.addEventListener("snapshot", onSnapshot);
 	connection.addEventListener("netState", onNetState);
 
-	function simulate() {
+	function simulate(dt) {
+		predictor.stepSeconds = dt;
 		const intent = keyboardIntent(input);
 		if (pointerFire) intent.fire = true;
-		connection.sendInput(intent);
+		const record = predictor.applyIntent(intent);
+		connection.sendInput(intent, record);
 		input.endStep();
 	}
 
 	function render(alpha) {
+		predictor.updateVisual();
 		const age = connection.stats.lastSnapshotAt
 			? performance.now() - connection.stats.lastSnapshotAt
 			: 0;
@@ -233,6 +246,7 @@ function startGame(room, pilotName, assets, localId = "p1") {
 		ctx.scale(scale, scale);
 		drawArena(ctx, matchView.arena);
 		matchView.draw(ctx, alpha, assets.sprites);
+		predictor.draw(ctx, alpha, assets.sprites);
 		ctx.restore();
 
 		drawScoreboard(
@@ -246,7 +260,14 @@ function startGame(room, pilotName, assets, localId = "p1") {
 		drawNetgraph(ctx, view, stats);
 	}
 
-	const loop = createLoop({ simulate, render });
+	const loop = createLoop({
+		step: 1 / connection.tickRate,
+		simulate,
+		render,
+	});
+	if (params.has("debug")) {
+		window.__dogfight = { connection, matchView, predictor, loop };
+	}
 	loop.start();
 }
 
