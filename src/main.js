@@ -1,70 +1,56 @@
 import "./style.css";
-import {
-	busyWait,
-	createAutoInput,
-	createRecorder,
-	readParams,
-} from "./experiments.js";
+import { keyboardIntent } from "./controls.js";
 import { createInput } from "./input.js";
 import { createLoop } from "./loop.js";
-import { lerp, lerpAngle } from "./math.js";
 import { setupCanvas } from "./render/canvas.js";
-import { drawArena, drawHud, drawShip } from "./render/draw.js";
-import { ARENA, wrapShip } from "./sim/arena.js";
-import { createShip, integrate } from "./sim/ship.js";
+import {
+	DRAW_ORDER,
+	drawArena,
+	drawEntity,
+	drawHud,
+	drawScoreboard,
+} from "./render/draw.js";
+import { ARENA } from "./sim/arena.js";
+import { createBot } from "./sim/bot.js";
+import { Game } from "./sim/game.js";
 
-const params = readParams();
-console.log("params", params);
-
+const params = new URLSearchParams(window.location.search);
 const canvas = document.getElementById("game");
 const { ctx, view } = setupCanvas(canvas);
-const input = params.auto ? createAutoInput() : createInput(window);
-const recorder = params.measure ? createRecorder(10) : null;
+const input = createInput(window);
 
-let previous = createShip(ARENA.width / 2, ARENA.height / 2);
-let current = previous;
-let simTime = 0;
-let traced = false;
-let frames = 0;
+const game = new Game({ seed: 1 });
+game.addPlayer({
+	id: "p1",
+	name: "YOU",
+	color: "#4ade80",
+	controller: () => keyboardIntent(input),
+});
+game.addPlayer({
+	id: "bot",
+	name: "BOT",
+	color: "#f87171",
+	controller: createBot(game, "bot"),
+	fireDelay: 0.7,
+});
+game.start();
+
+const me = () => game.players.get("p1");
+
+// Mouse fire. `?naive=1` passes the METHOD itself: the browser then calls it
+// with this = canvas, and Ship.fire() throws (see README, "The this bug").
+// Default: an arrow function keeps the call `ship.fire()` at the call site,
+// and looks the ship up at click time (the ship object changes on respawn).
+const onPointerDown =
+	params.get("naive") === "1" ? me().ship.fire : () => me().ship?.fire();
+canvas.addEventListener("pointerdown", onPointerDown);
 
 function simulate(dt) {
-	previous = current;
-	current = wrapShip(integrate(current, input, dt), ARENA);
+	game.step(dt);
 	input.endStep();
-
-	if (params.auto && !traced) {
-		simTime += dt;
-		if (simTime >= 5) {
-			traced = true;
-			console.log("[trace after 5 s of thrust]", {
-				x: +current.x.toFixed(4),
-				y: +current.y.toFixed(4),
-				simTime: +simTime.toFixed(4),
-			});
-		}
-	}
-}
-
-function interpolate(from, to, alpha) {
-	// the ship teleported across the arena edge: do not blend across the screen
-	const wrapped =
-		Math.abs(to.x - from.x) > ARENA.width / 2 ||
-		Math.abs(to.y - from.y) > ARENA.height / 2;
-	if (wrapped) return to;
-
-	return {
-		...to,
-		x: lerp(from.x, to.x, alpha),
-		y: lerp(from.y, to.y, alpha),
-		angle: lerpAngle(from.angle, to.angle, alpha),
-	};
 }
 
 function render(alpha) {
-	frames++;
-	if (params.busy && frames % 60 === 0) busyWait(100);
-	recorder?.(loop.stats.frameTime);
-
 	ctx.clearRect(0, 0, view.width, view.height);
 
 	const scale = Math.min(view.width / ARENA.width, view.height / ARENA.height);
@@ -75,17 +61,16 @@ function render(alpha) {
 	);
 	ctx.scale(scale, scale);
 	drawArena(ctx, ARENA);
-	drawShip(ctx, interpolate(previous, current, alpha));
+	for (const kind of DRAW_ORDER) {
+		for (const entity of game.world.ofKind(kind)) {
+			drawEntity(ctx, entity, alpha);
+		}
+	}
 	ctx.restore();
 
+	drawScoreboard(ctx, game, view, "p1");
 	drawHud(ctx, loop.stats);
 }
 
-const loop = createLoop({
-	simulate,
-	render,
-	scheduler: params.scheduler,
-	fixed: params.fixed,
-});
-
+const loop = createLoop({ simulate, render });
 loop.start();

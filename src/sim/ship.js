@@ -1,48 +1,107 @@
 import { normalizeAngle } from "../math.js";
+import { homing } from "./behaviors.js";
+import { BULLET_SPEED, Bullet } from "./bullet.js";
+import { Entity } from "./entity.js";
+import { Vector2 } from "./vector.js";
 
 export const TURN_RATE = 3.5; // rad/s
 export const THRUST = 700; // px/s^2
 export const DRAG = 1.5; // 1/s
 export const MAX_SPEED = 450; // px/s
 
-export function createShip(x, y) {
-	return { x, y, vx: 0, vy: 0, angle: -Math.PI / 2, thrust: false };
-}
+export class Ship extends Entity {
+	#hp;
 
-// pure: returns a new ship, does not touch the old one
-export function integrate(ship, input, dt) {
-	const left = input.isDown("ArrowLeft") || input.isDown("KeyA");
-	const right = input.isDown("ArrowRight") || input.isDown("KeyD");
-	const thrust = input.isDown("ArrowUp") || input.isDown("KeyW");
-
-	let angle = ship.angle;
-	if (left) angle -= TURN_RATE * dt;
-	if (right) angle += TURN_RATE * dt;
-	angle = normalizeAngle(angle);
-
-	let vx = ship.vx;
-	let vy = ship.vy;
-	if (thrust) {
-		vx += Math.cos(angle) * THRUST * dt;
-		vy += Math.sin(angle) * THRUST * dt;
+	constructor({
+		playerId,
+		pos,
+		color = "#4ade80",
+		angle = -Math.PI / 2,
+		maxHp = 100,
+		fireDelay = 0.25,
+	}) {
+		super({ kind: "ship", pos, angle, radius: 22 });
+		this.playerId = playerId;
+		this.color = color;
+		this.maxHp = maxHp;
+		this.fireDelay = fireDelay;
+		this.cooldown = 0;
+		this.thrusting = false;
+		this.#hp = maxHp;
 	}
 
-	const damping = Math.exp(-DRAG * dt);
-	vx *= damping;
-	vy *= damping;
-
-	const speed = Math.hypot(vx, vy);
-	if (speed > MAX_SPEED) {
-		vx = (vx / speed) * MAX_SPEED;
-		vy = (vy / speed) * MAX_SPEED;
+	get hp() {
+		return this.#hp;
 	}
 
-	return {
-		x: ship.x + vx * dt,
-		y: ship.y + vy * dt,
-		vx,
-		vy,
-		angle,
-		thrust,
-	};
+	get invulnerable() {
+		return this.hasBehavior("shield") || this.hasBehavior("invuln");
+	}
+
+	// returns true if this hit destroyed the ship
+	damage(amount) {
+		if (!this.alive || this.invulnerable) return false;
+		this.#hp = Math.max(0, this.#hp - amount);
+		if (this.#hp === 0) {
+			this.kill();
+			return true;
+		}
+		return false;
+	}
+
+	heal(amount) {
+		this.#hp = Math.min(this.maxHp, this.#hp + amount);
+	}
+
+	// intent = { turn: -1..1, thrust: bool, fire: bool } (from keyboard or bot)
+	control(intent, dt) {
+		this.angle = normalizeAngle(this.angle + intent.turn * TURN_RATE * dt);
+		this.thrusting = Boolean(intent.thrust);
+		if (this.thrusting) {
+			this.vel = this.vel.add(Vector2.fromAngle(this.angle, THRUST * dt));
+		}
+		if (intent.fire) this.fire();
+	}
+
+	update(dt) {
+		this.vel = this.vel.scale(Math.exp(-DRAG * dt));
+		const speed = this.vel.length();
+		if (speed > MAX_SPEED) this.vel = this.vel.scale(MAX_SPEED / speed);
+		super.update(dt);
+		this.cooldown = Math.max(0, this.cooldown - dt);
+	}
+
+	fire() {
+		// `this` is decided by the call site, so fail loudly when it is wrong
+		if (!(this instanceof Ship)) {
+			throw new TypeError(`Ship.fire() called with wrong this: ${this}`);
+		}
+		if (!this.alive || !this.world || this.cooldown > 0) return false;
+
+		this.cooldown = this.hasBehavior("rapid")
+			? this.fireDelay / 3
+			: this.fireDelay;
+
+		const dir = Vector2.fromAngle(this.angle);
+		const bullet = new Bullet({
+			pos: this.pos.add(dir.scale(this.radius + 8)),
+			vel: this.vel.add(dir.scale(BULLET_SPEED)),
+			ownerId: this.playerId,
+		});
+
+		if (this.hasBehavior("homingShots")) {
+			bullet.addBehavior(
+				homing({
+					turnRate: 4,
+					range: 450,
+					canTarget: (self, other) =>
+						other.kind === "asteroid" ||
+						(other.kind === "ship" && other.playerId !== self.ownerId),
+				}),
+			);
+		}
+
+		this.world.spawn(bullet);
+		return true;
+	}
 }

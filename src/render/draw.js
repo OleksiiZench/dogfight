@@ -1,3 +1,6 @@
+import { EFFECTS } from "../sim/behaviors.js";
+import { RESPAWN_DELAY } from "../sim/game.js";
+
 export function drawArena(ctx, arena) {
 	const { width, height } = arena;
 	ctx.save();
@@ -24,12 +27,8 @@ export function drawArena(ctx, arena) {
 }
 
 // FPV drone, top view, drawn at the origin pointing right (+x)
-export function drawShip(ctx, ship) {
+function drawDrone(ctx, ship) {
 	const arm = 22;
-
-	ctx.save();
-	ctx.translate(ship.x, ship.y);
-	ctx.rotate(ship.angle);
 
 	ctx.strokeStyle = "#94a3b8";
 	ctx.lineWidth = 4;
@@ -55,7 +54,7 @@ export function drawShip(ctx, ship) {
 		ctx.stroke();
 	}
 
-	ctx.fillStyle = "#4ade80";
+	ctx.fillStyle = ship.color;
 	ctx.fillRect(-9, -9, 18, 18);
 
 	// nose marker
@@ -67,7 +66,7 @@ export function drawShip(ctx, ship) {
 	ctx.closePath();
 	ctx.fill();
 
-	if (ship.thrust) {
+	if (ship.thrusting) {
 		ctx.fillStyle = "#fb923c";
 		ctx.beginPath();
 		ctx.moveTo(-12, -5);
@@ -76,8 +75,126 @@ export function drawShip(ctx, ship) {
 		ctx.closePath();
 		ctx.fill();
 	}
+}
+
+function drawShip(ctx, ship, alpha) {
+	const pos = ship.renderPos(alpha);
+	const hitFlash =
+		ship.hasBehavior("invuln") && Math.floor(ship.age * 12) % 2 === 0;
+
+	ctx.save();
+	ctx.translate(pos.x, pos.y);
+
+	ctx.save();
+	ctx.rotate(ship.renderAngle(alpha));
+	ctx.globalAlpha = hitFlash ? 0.35 : 1;
+	drawDrone(ctx, ship);
+	ctx.restore();
+
+	if (ship.hasBehavior("shield")) {
+		ctx.strokeStyle = "#22d3ee";
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		ctx.arc(0, 0, ship.radius + 12, 0, Math.PI * 2);
+		ctx.stroke();
+	}
+
+	// hp bar above the ship
+	const barWidth = 44;
+	const top = -ship.radius - 28;
+	ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+	ctx.fillRect(-barWidth / 2, top, barWidth, 5);
+	ctx.fillStyle = ship.color;
+	ctx.fillRect(-barWidth / 2, top, (barWidth * ship.hp) / ship.maxHp, 5);
 
 	ctx.restore();
+}
+
+function drawBullet(ctx, bullet, alpha) {
+	const pos = bullet.renderPos(alpha);
+	const tail = pos.sub(bullet.vel.normalize().scale(14));
+	ctx.save();
+	ctx.strokeStyle = bullet.hasBehavior("homing") ? "#f472b6" : "#fde68a";
+	ctx.lineWidth = 3;
+	ctx.lineCap = "round";
+	ctx.beginPath();
+	ctx.moveTo(tail.x, tail.y);
+	ctx.lineTo(pos.x, pos.y);
+	ctx.stroke();
+	ctx.restore();
+}
+
+function drawAsteroid(ctx, asteroid, alpha) {
+	const pos = asteroid.renderPos(alpha);
+	const angle = asteroid.renderAngle(alpha);
+	const count = asteroid.shape.length;
+
+	ctx.save();
+	ctx.translate(pos.x, pos.y);
+	ctx.rotate(angle);
+	ctx.beginPath();
+	for (let i = 0; i < count; i++) {
+		const a = (i / count) * Math.PI * 2;
+		const r = asteroid.radius * asteroid.shape[i];
+		const x = Math.cos(a) * r;
+		const y = Math.sin(a) * r;
+		if (i === 0) ctx.moveTo(x, y);
+		else ctx.lineTo(x, y);
+	}
+	ctx.closePath();
+	ctx.fillStyle = "#374151";
+	ctx.fill();
+	ctx.strokeStyle = asteroid.hasBehavior("homing") ? "#f87171" : "#9ca3af";
+	ctx.lineWidth = 2;
+	ctx.stroke();
+	ctx.restore();
+}
+
+function drawPickup(ctx, pickup, alpha) {
+	const pos = pickup.renderPos(alpha);
+	const effect = EFFECTS.get(pickup.effect);
+	const pulse = Math.sin(pickup.age * 4) * 2;
+
+	ctx.save();
+	ctx.translate(pos.x, pos.y);
+	ctx.strokeStyle = effect.color;
+	ctx.fillStyle = effect.color;
+	ctx.lineWidth = 3;
+	ctx.beginPath();
+	ctx.arc(0, 0, pickup.radius + pulse, 0, Math.PI * 2);
+	ctx.stroke();
+	ctx.font = "bold 16px monospace";
+	ctx.textAlign = "center";
+	ctx.textBaseline = "middle";
+	ctx.fillText(effect.label, 0, 1);
+	ctx.restore();
+}
+
+function drawExplosion(ctx, explosion) {
+	ctx.save();
+	ctx.fillStyle = explosion.color;
+	for (const p of explosion.particles) {
+		if (p.ttl <= 0) continue;
+		ctx.globalAlpha = Math.min(1, p.ttl / explosion.life);
+		ctx.fillRect(p.pos.x - 2, p.pos.y - 2, 4, 4);
+	}
+	ctx.restore();
+}
+
+// data-driven: one drawer per entity kind
+const DRAWERS = new Map([
+	["ship", drawShip],
+	["bullet", drawBullet],
+	["asteroid", drawAsteroid],
+	["pickup", drawPickup],
+	["explosion", drawExplosion],
+]);
+
+// back to front
+export const DRAW_ORDER = ["pickup", "asteroid", "bullet", "ship", "explosion"];
+
+export function drawEntity(ctx, entity, alpha) {
+	DRAWERS.get(entity.kind)?.(ctx, entity, alpha);
 }
 
 export function drawHud(ctx, stats) {
@@ -95,5 +212,43 @@ export function drawHud(ctx, stats) {
 	lines.forEach((text, i) => {
 		ctx.fillText(text, 12, 12 + i * 18);
 	});
+	ctx.restore();
+}
+
+export function drawScoreboard(ctx, game, view, localId) {
+	const players = [...game.players.values()];
+	const gap = 180;
+	const startX = view.width / 2 - ((players.length - 1) * gap) / 2;
+
+	ctx.save();
+	ctx.font = "bold 18px monospace";
+	ctx.textAlign = "center";
+	ctx.textBaseline = "top";
+	players.forEach((player, i) => {
+		ctx.fillStyle = player.color;
+		ctx.fillText(`${player.name}: ${player.score}`, startX + i * gap, 12);
+	});
+
+	const local = game.players.get(localId);
+	if (local && local.respawnIn !== null) {
+		const left = Math.max(0, Math.min(RESPAWN_DELAY, local.respawnIn));
+		ctx.fillStyle = "#f8fafc";
+		ctx.font = "bold 28px monospace";
+		ctx.textBaseline = "middle";
+		ctx.fillText(
+			`Respawn in ${left.toFixed(1)} s`,
+			view.width / 2,
+			view.height / 2,
+		);
+	}
+
+	ctx.fillStyle = "#6b7280";
+	ctx.font = "13px monospace";
+	ctx.textBaseline = "bottom";
+	ctx.fillText(
+		"arrows / WASD: fly · Space or click: fire",
+		view.width / 2,
+		view.height - 10,
+	);
 	ctx.restore();
 }
