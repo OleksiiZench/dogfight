@@ -1,0 +1,13 @@
+{
+	"sprites": {
+		"sheet": "/assets/sprites.png"
+	},
+	"sounds": {
+		"shoot": "/assets/shoot.wav",
+		"hit": "/assets/hit.wav",
+		"explosion": "/assets/explosion.wav",
+		"pickup": "/assets/pickup.wav"
+	},
+	"arena": "/assets/arena.json",
+	"rooms": "/api/rooms.json"
+}
