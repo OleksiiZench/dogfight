@@ -6,6 +6,7 @@
 
 - Лаба 1 (цикл із фіксованим кроком): тег `lab-01`, див. [docs/lab-01.md](docs/lab-01.md)
 - Лаба 2 (об'єкти, прототипи, `this`, композиція): тег `lab-02`, цей README
+- Лаба 3 (Promises, `async`/`await`, завантаження, лобі, звук): цей README, розділ «Лаба 3» нижче
 
 ## Запуск
 
@@ -100,7 +101,7 @@
 1. **Стрілка-обгортка** `() => ship.fire()`. Виклик знову має вигляд
    `ship.fire()`, тому `this` — корабель. Мінус: одна додаткова функція на
    обробник; якщо кораблем є змінна, що пізніше змінюється, обгортка тримає
-   стару змінну (див. нижче). *Обране рішення.*
+   стару змінну (див. нижче). _Обране рішення._
 2. **`ship.fire.bind(ship)`** — повертає копію функції з постійно прив'язаним
    `this`. Мінус: створює нову функцію щоразу, зберігає прив'язку до конкретного
    корабля (після респауну це вже інший об'єкт, тобто застарілий), а
@@ -143,7 +144,7 @@
 `homingShots`, `invuln`) — це `timedEffect(name, duration)`.
 
 **Пікап** — звичайний `Pickup extends Entity` (один рівень), але те, що він
-робить, не підклас, а *дані*: поле `effect` зберігає назву, а що вона означає,
+робить, не підклас, а _дані_: поле `effect` зберігає назву, а що вона означає,
 записано в таблиці `EFFECTS`. Додати новий пікап — додати рядок у таблицю, без
 нового класу. Така форма «поведінка як дані» ще й легко серіалізується, що
 знадобиться в лабі 5.
@@ -158,3 +159,164 @@
 
 Метод `update` лежить один раз у `Entity.prototype` (так само `Ship.prototype`
 і т. д.), а не копіюється у кожну кулю: пошук іде від об'єкта до прототипа.
+
+## Лаба 3 — асинхронність: завантаження, лобі, звук
+
+Умови: [`lab-03-async-javascript.md`](../Programming-Practice-Projects/courses/javascript/lab-03-async-javascript.md),
+нотатки: [`lab-03-async-javascript.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-03-async-javascript.notes.md).
+
+### Що додано
+
+**M1 — асети й екран завантаження.** `public/assets/manifest.json` перелічує
+спрайтшит, чотири WAV-звуки й опис арени; усі файли згенеровані локально, без
+мережі. `src/assets/loader.js` містить `fetchJson` (перевіряє `response.ok`),
+`loadImage`, `loadAudio`, `loadJson` (кожен приймає `AbortSignal`), `withRetry`
+(експоненційний backoff із джитером, 429/5xx — так, 4xx і скасування — ні) і
+`loadAll` через `Promise.all` із лічильником прогресу. Обов'язковий спрайтшит
+блокує старт і дає кнопку «Повторити»; звуки й арена необов'язкові — гра
+стартує з векторним fallback-малюнком і дефолтною ареною. Екран малюється на
+canvas (`src/ui/loading.js`) справжнім баром `done/total`.
+
+**M2 — спрайти й звук.** `src/render/sprites.js` ріже аркуш на 4 кадри
+(`drawImage` з прямокутником джерела); `src/render/draw.js` малює дрон, кулю,
+астероїд і пікап спрайтами, лишаючи старий векторний шлях як запасний.
+`src/audio/audio.js` тримає `AudioContext`, декодує буфери ще на екрані
+завантаження і запускає звук лише після жесту («Приєднатися» в лобі).
+Симуляція не імпортує аудіо чи HUD: `Ship.fire()` і `rules.js` пишуть події у
+`world.emit`, `Game.processEvents()` передсилає їх у `EventTarget`-шину
+(`src/events/bus.js`), а `audio.js` і `src/ui/hud.js` слухають `fired`, `hit`,
+`exploded`, `pickup`, `scoreChanged`.
+
+**M3 — лобі.** `public/api/rooms.json` — три кімнати зі своїми seed і розміром
+арени. `src/net/lobby.js` (`extends EventTarget`) робить `refresh()` кожні 4 с,
+кожен запит має `AbortSignal.any([controller.signal, AbortSignal.timeout(6000)])`,
+а `leave()` все скасовує — осиротілих відповідей немає. Рендеринг лобі
+повністю окремий: `src/ui/lobbyView.js` лише слухає події. Вибір кімнати задає
+seed, арену і кількість астероїдів для нової `Game`.
+
+**M4 — головоломки й галерея.** Нижче. Тег `lab-03` створюється після
+фінальної перевірки.
+
+### Режими для перевірки
+
+| URL              | Що відбувається                                                   |
+| ---------------- | ----------------------------------------------------------------- |
+| `/`              | звичайне завантаження                                             |
+| `/?slow=3`       | три повільні (2,5 с) JSON-асети — прогрес і паралелізм            |
+| `/?fail=404`     | обов'язковий спрайт віддає 404 — помилка + «Повторити»            |
+| `/?fail=json`    | арена з бітим JSON — попередження, гра стартує з дефолтною ареною |
+| `/?fail=timeout` | `AbortSignal.timeout(800)` на повільному асеті                    |
+| `/?fail=abort`   | натисни «Скасувати» під час повільного асета                      |
+| `/?retry=1`      | `/debug/flaky` двічі віддає 503, потім успіх                      |
+| `/?sequential=1` | `loadAll` чекає асети один за одним                               |
+| `/?naive=1`      | старий баг із `this` із Лаби 2                                    |
+
+Debug-ендпоїнти (`/debug/slow`, `/debug/badjson`, `/debug/404`, `/debug/flaky`)
+живуть у `vite.config.js` і працюють у dev та preview.
+
+### Послідовно vs `Promise.all`
+
+Замір fetch-етапу на локальному dev-сервері (Node 26, 6 звичайних асетів;
+повільний асет = 2500 мс):
+
+    default:   sequential=81 ms,   Promise.all=50 ms,   delta=31 ms   (6 assets)
+    with 3 slow: sequential=7562 ms, Promise.all=2516 ms, delta=5046 ms (9 assets)
+
+Різниця не в слові `await`, а в моменті старту: `const a = await loadA();
+const b = await loadB()` запускає B після A; `Promise.all([loadA(), loadB()])`
+стартує обидві одразу. У браузері той самий замір друкується в консоль як
+`[loadAll] concurrent: … ms` / `[loadAll] sequential: … ms`.
+
+### П'ять головоломок порядку
+
+**1. `await null` завжди віддає чергу**
+
+```js
+async function f() {
+	console.log(1);
+	await null;
+	console.log(2);
+}
+f();
+console.log(3); // 1, 3, 2
+```
+
+`2` — продовження-мікрозадача, а не продовження поточного повороту.
+
+**2. `setTimeout` усередині `.then`**
+
+```js
+setTimeout(() => console.log("timer"), 0);
+Promise.resolve()
+	.then(() => {
+		setTimeout(() => console.log("nested timer"), 0);
+		console.log("then");
+	})
+	.then(() => console.log("then2"));
+console.log("sync");
+// sync, then, then2, timer, nested timer
+```
+
+Уся мікрочерга йде до першої задачі; вкладений таймер стає в чергу після вже
+запланованого `timer`.
+
+**3. `requestAnimationFrame` vs мікрозадача vs таймер**
+
+```js
+Promise.resolve().then(() => console.log("micro"));
+requestAnimationFrame(() => console.log("raf"));
+setTimeout(() => console.log("timer"), 0);
+console.log("sync"); // sync, micro, далі raf/timer — порядок не гарантований
+```
+
+Мікрозадача — завжди перед обома; `raf` прив'язаний до paint, `timer` — до черги
+задач.
+
+**4. Забутий `return` у ланцюжку**
+
+```js
+Promise.resolve(1)
+	.then((n) => {
+		Promise.resolve(n + 1);
+	})
+	.then((n) => console.log("forgot", n));
+Promise.resolve(1)
+	.then((n) => Promise.resolve(n + 1))
+	.then((n) => console.log("returned", n));
+// forgot undefined, returned 2
+```
+
+Ланцюг чекає повернутого значення; без `return` далі приходить `undefined`.
+
+**5. `Promise.all` падає, але сусіди не зупиняються**
+
+```js
+const slow = new Promise((r) =>
+	setTimeout(() => {
+		console.log("slow done");
+		r("s");
+	}, 100),
+);
+Promise.all([slow, Promise.reject(new Error("fast"))]).catch((e) =>
+	console.log("all", e.message),
+);
+// all fast, slow done
+```
+
+`all` не скасовує інші проміси; для часткових відмов треба `allSettled`.
+
+### Галерея відмов
+
+Логи знято запуском `src/assets/loader.js` проти dev-сервера:
+
+| Режим      | Лог                                                      | Відновлення                                                                  |
+| ---------- | -------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| 404        | `HttpError: HTTP 404 for …/debug/404 (status 404)`       | 4xx не ретраїться; екран показує «Повторити», гра не стартує без спрайта     |
+| битий JSON | `Error: Invalid JSON in …/debug/badjson`                 | необов'язковий асет пропущено, `World` бере дефолтну арену 1600×900          |
+| timeout    | `TimeoutError: The operation was aborted due to timeout` | асет пропущено з попередженням у прогресі, гра стартує                       |
+| abort      | `AbortError: This operation was aborted`                 | «Завантаження скасовано», кнопка «Повторити» створює новий `AbortController` |
+| 503 ×2     | `retry 503: OK {"ok":true,"attempts":3}`                 | `withRetry` робить два повтори з backoff + jitter і всі встигає скасувати    |
+
+Критичне правило: `fetch` на 404 **виконується** (заголовки прийшли), тому
+`fetchJson` сам кидає `HttpError`; тіло читається другим `await`, а 404 — це
+не мережева помилка.
