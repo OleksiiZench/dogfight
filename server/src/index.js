@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { HttpError, handleApi, sendJson } from "./http/router.js";
 import { serveStatic } from "./http/static.js";
+import { attachMatchLog } from "./log/matchlog.js";
 import { RoomManager } from "./rooms.js";
 import { attachWebSocket } from "./ws.js";
 
@@ -34,6 +35,23 @@ export async function createApp(config = loadConfig()) {
 	const gameServer = attachWebSocket(server, { config, rooms });
 	closeHooks.push(() => gameServer.close());
 
+	const logs = new Map();
+	function attachLog(room) {
+		const log = attachMatchLog(room, config);
+		logs.set(room.id, log);
+	}
+	for (const room of rooms.rooms.values()) attachLog(room);
+	rooms.on("created", attachLog);
+	rooms.on("removed", (room) => {
+		const log = logs.get(room.id);
+		if (!log) return;
+		void log.close().finally(() => logs.delete(room.id));
+	});
+	closeHooks.push(async () => {
+		await Promise.all([...logs.values()].map((log) => log.close()));
+		logs.clear();
+	});
+
 	async function handleRequest(req, res) {
 		if (closing) {
 			sendJson(res, 503, { ok: false, error: "server is shutting down" });
@@ -47,6 +65,7 @@ export async function createApp(config = loadConfig()) {
 					rooms,
 					startedAt,
 					gameServer,
+					logCount: logs.size,
 				});
 				if (!handled) sendJson(res, 404, { error: "unknown endpoint" });
 				return;

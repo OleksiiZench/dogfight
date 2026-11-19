@@ -1,3 +1,6 @@
+import { stat } from "node:fs/promises";
+import { listReplays, replayPath, streamReplay } from "../log/replay.js";
+
 export class HttpError extends Error {
 	constructor(status, message) {
 		super(message);
@@ -47,7 +50,7 @@ function busyWait(milliseconds) {
 }
 
 export async function handleApi(req, res, url, context) {
-	const { config, rooms, startedAt, gameServer } = context;
+	const { config, rooms, startedAt, gameServer, logCount = 0 } = context;
 
 	if (url.pathname === "/health") {
 		if (req.method !== "GET") methodNotAllowed(res, "GET");
@@ -58,6 +61,7 @@ export async function handleApi(req, res, url, context) {
 			rooms: rooms.rooms.size,
 			wsClients: gameServer?.clients.size ?? 0,
 			droppedMessages: gameServer?.stats.droppedMessages ?? 0,
+			activeLogs: logCount,
 		});
 		return true;
 	}
@@ -81,6 +85,26 @@ export async function handleApi(req, res, url, context) {
 			return true;
 		}
 		methodNotAllowed(res, "GET, POST");
+	}
+
+	if (url.pathname === "/api/replays") {
+		if (req.method !== "GET") methodNotAllowed(res, "GET");
+		sendJson(res, 200, await listReplays(config.logDir));
+		return true;
+	}
+
+	if (url.pathname.startsWith("/api/replays/")) {
+		if (req.method !== "GET" && req.method !== "HEAD")
+			methodNotAllowed(res, "GET, HEAD");
+		const id = decodeURIComponent(url.pathname.slice("/api/replays/".length));
+		const filePath = replayPath(config.logDir, id);
+		try {
+			await stat(filePath);
+		} catch {
+			throw new HttpError(404, "replay not found");
+		}
+		await streamReplay(res, filePath, { head: req.method === "HEAD" });
+		return true;
 	}
 
 	return false;
