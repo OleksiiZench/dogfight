@@ -202,6 +202,7 @@ function startGame(room, pilotName, assets, localId = "p1") {
 		if (!matchView.applySnapshot(event.detail)) return;
 		predictor.reconcile(event.detail, connection);
 		matchView.excludeId = predictor.shipId;
+		matchView.excludeOwnerId = localId;
 	};
 	const onNetState = (event) => {
 		const { latencyMs, jitterMs, dropRate } = event.detail.net;

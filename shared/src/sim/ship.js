@@ -64,7 +64,7 @@ export class Ship extends Entity {
 		if (this.thrusting) {
 			this.vel = this.vel.add(Vector2.fromAngle(this.angle, THRUST * dt));
 		}
-		if (intent.fire) this.fire();
+		if (intent.fire) this.fire(intent.seq);
 	}
 
 	update(dt) {
@@ -75,7 +75,7 @@ export class Ship extends Entity {
 		this.cooldown = Math.max(0, this.cooldown - dt);
 	}
 
-	fire() {
+	fire(sourceSeq = null) {
 		// `this` is decided by the call site, so fail loudly when it is wrong
 		if (!(this instanceof Ship)) {
 			throw new TypeError(`Ship.fire() called with wrong this: ${this}`);
@@ -92,6 +92,7 @@ export class Ship extends Entity {
 			pos: this.pos.add(dir.scale(this.radius + 8)),
 			vel: this.vel.add(dir.scale(BULLET_SPEED)),
 			ownerId: this.playerId,
+			sourceSeq,
 		});
 
 		if (this.hasBehavior("homingShots")) {

@@ -26,12 +26,22 @@ export class Predictor {
 		this.visualAngle = 0;
 		this.lastVisualAt = performance.now();
 		this.pending = [];
+		this.predictedBullets = new Map();
+		this.confirmedBullets = new Map();
 		this.seq = 0;
 		this.tick = 0;
 		this.world = {
 			arena: this.arena,
+			owner: this,
 			nextId: () => -1000 - this.seq,
-			spawn() {},
+			spawn(entity) {
+				if (entity.kind === "bullet") {
+					this.owner.predictedBullets.set(
+						entity.sourceSeq ?? entity.id,
+						entity,
+					);
+				}
+			},
 			emit() {},
 		};
 	}
@@ -49,19 +59,55 @@ export class Predictor {
 			intent: { ...intent },
 		};
 		this.pending.push(record);
-		if (this.ship) this.stepShip(record.intent);
+		if (this.ship) {
+			this.stepShip(record.intent, record.seq);
+			this.stepBullets();
+		}
 		return record;
 	}
 
-	stepShip(intent) {
+	stepShip(intent, seq) {
 		this.ship.savePrevious();
-		this.ship.control(intent, this.stepSeconds);
+		this.ship.control({ ...intent, seq }, this.stepSeconds);
 		this.ship.update(this.stepSeconds);
 	}
 
-	reconcile(snapshot, connection) {
+	stepBullets() {
+		for (const [key, bullet] of this.predictedBullets) {
+			bullet.savePrevious();
+			bullet.update(this.stepSeconds);
+			if (!bullet.alive) this.predictedBullets.delete(key);
+		}
+		for (const [key, bullet] of this.confirmedBullets) {
+			bullet.savePrevious();
+			bullet.update(this.stepSeconds);
+			if (!bullet.alive) this.confirmedBullets.delete(key);
+		}
+	}
+
+	reconcileBullets(snapshot, ack) {
 		this.arena = snapshot.arena ?? this.arena;
 		this.world.arena = this.arena;
+		const seen = new Set();
+		for (const data of snapshot.entities ?? []) {
+			if (data.kind !== "bullet" || data.ownerId !== this.localId) continue;
+			const key = data.sourceSeq ?? data.id;
+			seen.add(key);
+			this.confirmedBullets.set(key, entityFromSnapshot(data, this.arena));
+			if (data.sourceSeq !== null && data.sourceSeq !== undefined) {
+				this.predictedBullets.delete(data.sourceSeq);
+			}
+		}
+		for (const key of [...this.confirmedBullets.keys()]) {
+			if (!seen.has(key)) this.confirmedBullets.delete(key);
+		}
+		for (const [key] of [...this.predictedBullets]) {
+			if (key <= ack) this.predictedBullets.delete(key);
+		}
+	}
+
+	reconcile(snapshot, connection) {
+		this.reconcileBullets(snapshot, Number(snapshot.lastProcessedSeq ?? 0));
 		const ack = Number(snapshot.lastProcessedSeq ?? 0);
 		const data = snapshot.entities?.find(
 			(entity) => entity.kind === "ship" && entity.playerId === this.localId,
@@ -85,7 +131,10 @@ export class Predictor {
 		authoritative.world = this.world;
 		this.ship = authoritative;
 		this.pending = this.pending.filter((record) => record.seq > ack);
-		for (const record of this.pending) this.stepShip(record.intent);
+		for (const record of this.pending) {
+			this.stepShip(record.intent, record.seq);
+			this.stepBullets();
+		}
 		connection.stats.pendingInputs = this.pending.length;
 
 		const teleported =
@@ -123,6 +172,10 @@ export class Predictor {
 	}
 
 	draw(ctx, alpha, sprites) {
+		for (const bullet of this.confirmedBullets.values())
+			drawEntity(ctx, bullet, alpha, sprites);
+		for (const bullet of this.predictedBullets.values())
+			drawEntity(ctx, bullet, alpha, sprites);
 		if (this.visualShip) drawEntity(ctx, this.visualShip, alpha, sprites);
 	}
 }

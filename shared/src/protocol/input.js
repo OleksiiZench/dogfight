@@ -32,6 +32,7 @@ export function validateInput(raw) {
 export function intentOf(input) {
 	if (!input) return EMPTY_INTENT;
 	return {
+		seq: input.seq,
 		turn: input.turn,
 		thrust: input.thrust,
 		fire: input.fire,

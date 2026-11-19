@@ -63,6 +63,7 @@ export function serializeEntity(entity) {
 	} else if (entity.kind === "bullet") {
 		Object.assign(data, {
 			ownerId: entity.ownerId,
+			sourceSeq: entity.sourceSeq,
 			ttl: entity.ttl,
 			damage: entity.damage,
 		});
@@ -116,6 +117,7 @@ export function entityFromSnapshot(data, arena) {
 				pos: new Vector2(data.x, data.y),
 				vel: new Vector2(data.vx, data.vy),
 				ownerId: data.ownerId,
+				sourceSeq: data.sourceSeq ?? null,
 				ttl: data.ttl,
 				damage: data.damage,
 			}),

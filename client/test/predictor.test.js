@@ -51,3 +51,28 @@ test("reconciliation records authoritative correction magnitude", () => {
 	client.reconcile(snapshot(game, 1, 1, 50), net);
 	assert.ok(Math.abs(net.stats.correction - 50) < 1e-6);
 });
+
+test("predicted bullet is replaced by the authoritative bullet by source seq", () => {
+	const game = newGame();
+	const client = new Predictor({ arena, localId: "p1", stepSeconds: dt });
+	const net = connection();
+	client.reconcile(snapshot(game, 0, 0), net);
+
+	const record = client.applyIntent({ ...intent, fire: true });
+	assert.equal(client.predictedBullets.size, 1);
+	assert.equal([...client.predictedBullets.values()][0].sourceSeq, record.seq);
+
+	game.step(
+		dt,
+		new Map([
+			[
+				game.players.get("p1").shipId,
+				{ ...intent, fire: true, seq: record.seq },
+			],
+		]),
+	);
+	client.reconcile(snapshot(game, 1, record.seq), net);
+
+	assert.equal(client.predictedBullets.size, 0);
+	assert.equal(client.confirmedBullets.has(record.seq), true);
+});
