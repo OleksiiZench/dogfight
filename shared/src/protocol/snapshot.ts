@@ -163,7 +163,7 @@ export function entityFromSnapshot(
 					vel: new Vector2(data.vx, data.vy),
 					radius: data.radius,
 					spin: data.spin,
-					shape: data.shape,
+					shape: [...data.shape],
 					hp: data.hp,
 				}),
 				data,

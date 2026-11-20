@@ -36,89 +36,89 @@ export type EntityKind =
 export type EffectName = "shield" | "rapid" | "homing" | "repair";
 
 export interface BehaviorSnapshot {
-	name: string;
-	remaining: number | null;
+	readonly name: string;
+	readonly remaining: number | null;
 }
 
 export interface ParticleSnapshot {
-	x: number;
-	y: number;
-	vx: number;
-	vy: number;
-	ttl: number;
+	readonly x: number;
+	readonly y: number;
+	readonly vx: number;
+	readonly vy: number;
+	readonly ttl: number;
 }
 
 interface EntityDataBase {
-	id: number;
-	kind: EntityKind;
-	x: number;
-	y: number;
-	vx: number;
-	vy: number;
-	angle: number;
-	age: number;
-	radius: number;
-	behaviors: BehaviorSnapshot[];
+	readonly id: number;
+	readonly kind: EntityKind;
+	readonly x: number;
+	readonly y: number;
+	readonly vx: number;
+	readonly vy: number;
+	readonly angle: number;
+	readonly age: number;
+	readonly radius: number;
+	readonly behaviors: readonly BehaviorSnapshot[];
 }
 
 export type EntityData =
 	| (EntityDataBase & {
-			kind: "ship";
-			playerId: PlayerId;
-			color: string;
-			hp: number;
-			maxHp: number;
-			fireDelay: number;
-			cooldown: number;
-			thrusting: boolean;
+			readonly kind: "ship";
+			readonly playerId: PlayerId;
+			readonly color: string;
+			readonly hp: number;
+			readonly maxHp: number;
+			readonly fireDelay: number;
+			readonly cooldown: number;
+			readonly thrusting: boolean;
 	  })
 	| (EntityDataBase & {
-			kind: "bullet";
-			ownerId: PlayerId;
-			sourceSeq: number | null;
-			ttl: number;
-			damage: number;
+			readonly kind: "bullet";
+			readonly ownerId: PlayerId;
+			readonly sourceSeq: number | null;
+			readonly ttl: number;
+			readonly damage: number;
 	  })
 	| (EntityDataBase & {
-			kind: "asteroid";
-			hp: number;
-			spin: number;
-			shape: number[];
+			readonly kind: "asteroid";
+			readonly hp: number;
+			readonly spin: number;
+			readonly shape: readonly number[];
 	  })
 	| (EntityDataBase & {
-			kind: "pickup";
-			effect: EffectName;
-			ttl: number;
+			readonly kind: "pickup";
+			readonly effect: EffectName;
+			readonly ttl: number;
 	  })
 	| (EntityDataBase & {
-			kind: "explosion";
-			color: string;
-			life: number;
-			particles: ParticleSnapshot[];
+			readonly kind: "explosion";
+			readonly color: string;
+			readonly life: number;
+			readonly particles: readonly ParticleSnapshot[];
 	  });
 
 export interface PlayerSnapshot {
-	id: PlayerId;
-	name: string;
-	color: string;
-	score: number;
-	shipId: number | null;
-	respawnIn: number | null;
+	readonly id: PlayerId;
+	readonly name: string;
+	readonly color: string;
+	readonly score: number;
+	readonly shipId: number | null;
+	readonly respawnIn: number | null;
 }
 
 export interface Snapshot {
-	type: "snapshot";
-	tick: number;
-	arena: Arena;
-	entities: EntityData[];
-	players: PlayerSnapshot[];
-	events?: GameEvent[];
-	lastProcessedSeq?: number;
+	readonly type: "snapshot";
+	readonly tick: number;
+	readonly arena: Arena;
+	readonly entities: readonly EntityData[];
+	readonly players: readonly PlayerSnapshot[];
+	readonly events?: readonly GameEvent[];
+	readonly lastProcessedSeq?: number;
 }
 
 export interface DecodedSnapshot extends Snapshot {
-	events: GameEvent[];
-	lastProcessedSeq: number;
+	readonly events: readonly GameEvent[];
+	readonly lastProcessedSeq: number;
 }
 
 export interface ShipSummary {
@@ -177,6 +177,21 @@ export interface ProtocolFailure {
 export type Result<T, E = ProtocolFailure> =
 	| { ok: true; value: T }
 	| { ok: false; error: E };
+
+export type ReadonlyDeep<T> = T extends
+	| number
+	| string
+	| boolean
+	| bigint
+	| symbol
+	| null
+	| undefined
+	? T
+	: T extends readonly (infer Item)[]
+		? readonly ReadonlyDeep<Item>[]
+		: T extends object
+			? { readonly [Key in keyof T]: ReadonlyDeep<T[Key]> }
+			: T;
 
 export function assertNever(value: never): never {
 	throw new Error(`unhandled variant: ${JSON.stringify(value)}`);

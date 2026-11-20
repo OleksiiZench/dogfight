@@ -6,6 +6,7 @@ import {
 	type CodecName,
 	type GameEvent,
 	type PlayerId,
+	type ReadonlyDeep,
 	type Result,
 } from "../types.ts";
 
@@ -329,8 +330,14 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
 	SnapshotMessageSchema,
 ]);
 
-export type ServerMessage = z.infer<typeof ServerMessageSchema>;
-export type SnapshotMessage = z.infer<typeof SnapshotMessageSchema>;
+type InferredServerMessage = z.infer<typeof ServerMessageSchema>;
+
+export type ServerMessage =
+	| Exclude<InferredServerMessage, { type: "snapshot" }>
+	| SnapshotMessage;
+export type SnapshotMessage = ReadonlyDeep<
+	z.infer<typeof SnapshotMessageSchema>
+>;
 export type NetSettings = z.infer<typeof NetSettingsSchema>;
 export type RoomInfo = z.infer<typeof RoomInfoSchema>;
 
