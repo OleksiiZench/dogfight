@@ -55,7 +55,11 @@ export interface MatchStatsSummary {
 	players: number;
 }
 
-export class Match extends EventEmitter {
+export interface MatchEvents {
+	tick: [snapshot: Snapshot];
+}
+
+export class Match extends EventEmitter<MatchEvents> {
 	readonly room: Room;
 	readonly stepSeconds: number;
 	readonly intervalMs: number;

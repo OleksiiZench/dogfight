@@ -49,6 +49,21 @@ export type RoomChatEvent = RoomEvent<
 	{ player: RoomPlayer; text: string }
 >;
 
+export interface RoomEvents {
+	error: [error: Error];
+	event: [event: RoomEvent];
+	join: [player: RoomPlayer];
+	leave: [player: RoomPlayer];
+	empty: [];
+	chat: [event: RoomChatEvent];
+}
+
+export interface RoomManagerEvents {
+	error: [error: Error];
+	created: [room: Room];
+	removed: [room: Room];
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
@@ -112,7 +127,7 @@ export function normalizeRoomDefinition(
 	};
 }
 
-export class Room extends EventEmitter {
+export class Room extends EventEmitter<RoomEvents> {
 	readonly id: string;
 	readonly name: string;
 	readonly seed: number;
@@ -133,7 +148,7 @@ export class Room extends EventEmitter {
 		this.capacity = definition.capacity;
 		this.players = new Map();
 		this.sequence = 0;
-		this.on("error", (error: Error) =>
+		this.on("error", (error) =>
 			console.error(`[room ${this.id}]`, error.message),
 		);
 	}
@@ -222,7 +237,7 @@ export interface RoomManagerOptions {
 	maxPlayersPerRoom?: number;
 }
 
-export class RoomManager extends EventEmitter {
+export class RoomManager extends EventEmitter<RoomManagerEvents> {
 	readonly rooms: Map<string, Room>;
 	readonly maxRooms: number;
 	readonly maxPlayersPerRoom: number;
@@ -236,12 +251,15 @@ export class RoomManager extends EventEmitter {
 		this.rooms = new Map();
 		this.maxRooms = maxRooms;
 		this.maxPlayersPerRoom = maxPlayersPerRoom;
-		this.on("error", (error: Error) => console.error("[rooms]", error.message));
+		this.on("error", (error) => console.error("[rooms]", error.message));
 		for (const definition of definitions) {
 			try {
 				this.create(definition);
 			} catch (error) {
-				this.emit("error", error);
+				this.emit(
+					"error",
+					error instanceof Error ? error : new Error(String(error)),
+				);
 			}
 		}
 	}
