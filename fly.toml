@@ -1,5 +1,5 @@
 app = "dogfight-oleksii-waw"
-primary_region = "waw"
+primary_region = "arn"
 kill_signal = "SIGTERM"
 kill_timeout = "10s"
 
