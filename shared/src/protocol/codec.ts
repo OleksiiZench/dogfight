@@ -2,7 +2,7 @@
  * Binary protocol v1 (little-endian, DataView):
  * byte 0: version = 1
  * byte 1: message type (1 = input, 2 = snapshot)
- * Input: seq u32, tick u32, turn i16 (radians * 1000), thrust u8, fire u8 = 13 bytes.
+ * Input: seq u32, tick u32, turn i16 (radians * 1000), thrust u8, fire u8 = 14 bytes.
  * Snapshot: tick u32, arena width/height f32, player count u16,
  *   per player: id/name/color strings (u8 length + UTF-8), score i32, shipId i32 (-1 = none), respawnIn i16 ms (-1 = none),
  *   entity count u16,
@@ -17,62 +17,109 @@
  * Strings are truncated to 255 bytes; timestamps are milliseconds unless noted.
  */
 
+import type {
+	BehaviorSnapshot,
+	BinarySource,
+	DecodedSnapshot,
+	EntityData,
+	EntityKind,
+	GameEvent,
+	InputFields,
+	InputMessage,
+	PlayerSnapshot,
+	Snapshot,
+	WirePayload,
+} from "../types.ts";
+import { asSeq, assertNever, asTick } from "../types.ts";
+import {
+	EffectNameSchema,
+	GameEventSchema,
+	PROTOCOL_VERSION,
+} from "./schema.ts";
+
 export const CODEC_VERSION = 1;
-export const MESSAGE_TYPE = { INPUT: 1, SNAPSHOT: 2 };
+export const MESSAGE_TYPE: { readonly INPUT: 1; readonly SNAPSHOT: 2 } = {
+	INPUT: 1,
+	SNAPSHOT: 2,
+};
+type MessageType = 1 | 2;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const KINDS = { ship: 1, bullet: 2, asteroid: 3, pickup: 4, explosion: 5 };
-const KIND_NAMES = Object.fromEntries(
-	Object.entries(KINDS).map(([name, code]) => [code, name]),
-);
+const KINDS: Readonly<Record<EntityKind, number>> = {
+	ship: 1,
+	bullet: 2,
+	asteroid: 3,
+	pickup: 4,
+	explosion: 5,
+};
+const KIND_NAMES = new Map<number, EntityKind>([
+	[KINDS.ship, "ship"],
+	[KINDS.bullet, "bullet"],
+	[KINDS.asteroid, "asteroid"],
+	[KINDS.pickup, "pickup"],
+	[KINDS.explosion, "explosion"],
+]);
 
-function clamp(value, min, max) {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+function clamp(value: unknown, min: number, max: number): number {
 	return Math.min(max, Math.max(min, Number(value) || 0));
 }
 
-function integer(value, min, max) {
+function integer(value: unknown, min: number, max: number): number {
 	return Math.round(clamp(value, min, max));
 }
 
-function ms(value) {
+function ms(value: unknown): number {
 	return integer((Number(value) || 0) * 1000, 0, 65535);
 }
 
-function centiseconds(value) {
+function centiseconds(value: unknown): number {
 	return integer((Number(value) || 0) * 100, 0, 65535);
 }
 
-function signedMs(value) {
+function signedMs(value: unknown): number {
 	if (value === null || value === undefined) return -1;
 	return integer(Number(value) * 1000, -32768, 32767);
 }
 
-function radians(value) {
+function radians(value: unknown): number {
 	return integer((Number(value) || 0) * 1000, -32768, 32767);
 }
 
-function bytesOf(data) {
-	return data instanceof Uint8Array ? data : new Uint8Array(data);
+function finite(value: number): number {
+	return Number.isFinite(value) ? value : 0;
 }
 
-function toArrayBuffer(data) {
+function bytesOf(data: BinarySource): Uint8Array {
+	if (data instanceof ArrayBuffer) return new Uint8Array(data);
+	const bytes = new Uint8Array(data.byteLength);
+	bytes.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+	return bytes;
+}
+
+function toArrayBuffer(data: BinarySource): ArrayBuffer {
 	if (data instanceof ArrayBuffer) return data;
 	const bytes = bytesOf(data);
-	return bytes.buffer.slice(
-		bytes.byteOffset,
-		bytes.byteOffset + bytes.byteLength,
-	);
+	const copy = new Uint8Array(bytes.byteLength);
+	copy.set(bytes);
+	return copy.buffer;
 }
 
 class Writer {
+	buffer: ArrayBuffer;
+	view: DataView;
+	offset: number;
+
 	constructor(size = 512) {
 		this.buffer = new ArrayBuffer(size);
 		this.view = new DataView(this.buffer);
 		this.offset = 0;
 	}
 
-	ensure(length) {
+	ensure(length: number): void {
 		const needed = this.offset + length;
 		if (needed <= this.buffer.byteLength) return;
 		let size = this.buffer.byteLength * 2;
@@ -83,136 +130,156 @@ class Writer {
 		this.view = new DataView(next);
 	}
 
-	u8(value) {
+	u8(value: number): this {
 		this.ensure(1);
 		this.view.setUint8(this.offset++, value);
 		return this;
 	}
 
-	i16(value) {
+	i16(value: number): this {
 		this.ensure(2);
 		this.view.setInt16(this.offset, value, true);
 		this.offset += 2;
 		return this;
 	}
 
-	u16(value) {
+	u16(value: number): this {
 		this.ensure(2);
 		this.view.setUint16(this.offset, value, true);
 		this.offset += 2;
 		return this;
 	}
 
-	i32(value) {
+	i32(value: number): this {
 		this.ensure(4);
 		this.view.setInt32(this.offset, value, true);
 		this.offset += 4;
 		return this;
 	}
 
-	u32(value) {
+	u32(value: number): this {
 		this.ensure(4);
 		this.view.setUint32(this.offset, value, true);
 		this.offset += 4;
 		return this;
 	}
 
-	f32(value) {
+	f32(value: number): this {
 		this.ensure(4);
 		this.view.setFloat32(this.offset, value, true);
 		this.offset += 4;
 		return this;
 	}
 
-	bytes(data) {
-		const bytes = bytesOf(data);
-		this.ensure(bytes.byteLength);
-		new Uint8Array(this.buffer, this.offset).set(bytes);
-		this.offset += bytes.byteLength;
+	bytes(data: Uint8Array): this {
+		this.ensure(data.byteLength);
+		new Uint8Array(this.buffer, this.offset).set(data);
+		this.offset += data.byteLength;
 		return this;
 	}
 
-	string(value) {
+	string(value: unknown): this {
 		const bytes = encoder.encode(String(value ?? "").slice(0, 255));
 		this.u8(bytes.byteLength);
 		return this.bytes(bytes);
 	}
 
-	result() {
+	result(): ArrayBuffer {
 		return this.buffer.slice(0, this.offset);
 	}
 }
 
 class Reader {
-	constructor(data) {
+	buffer: ArrayBuffer;
+	view: DataView;
+	offset: number;
+
+	constructor(data: BinarySource) {
 		this.buffer = toArrayBuffer(data);
 		this.view = new DataView(this.buffer);
 		this.offset = 0;
 	}
 
-	check(length) {
+	check(length: number): void {
 		if (this.offset + length > this.buffer.byteLength) {
 			throw new Error("truncated binary message");
 		}
 	}
 
-	u8() {
+	u8(): number {
 		this.check(1);
 		return this.view.getUint8(this.offset++);
 	}
 
-	i16() {
+	i16(): number {
 		this.check(2);
 		const value = this.view.getInt16(this.offset, true);
 		this.offset += 2;
 		return value;
 	}
 
-	u16() {
+	u16(): number {
 		this.check(2);
 		const value = this.view.getUint16(this.offset, true);
 		this.offset += 2;
 		return value;
 	}
 
-	i32() {
+	i32(): number {
 		this.check(4);
 		const value = this.view.getInt32(this.offset, true);
 		this.offset += 4;
 		return value;
 	}
 
-	u32() {
+	u32(): number {
 		this.check(4);
 		const value = this.view.getUint32(this.offset, true);
 		this.offset += 4;
 		return value;
 	}
 
-	f32() {
+	f32(): number {
 		this.check(4);
 		const value = this.view.getFloat32(this.offset, true);
 		this.offset += 4;
-		return value;
+		return finite(value);
 	}
 
-	bytes(length) {
+	bytes(length: number): Uint8Array {
 		this.check(length);
 		const slice = this.buffer.slice(this.offset, this.offset + length);
 		this.offset += length;
 		return new Uint8Array(slice);
 	}
 
-	string() {
+	string(): string {
 		return decoder.decode(this.bytes(this.u8()));
+	}
+
+	finish(): void {
+		if (this.offset !== this.buffer.byteLength) {
+			throw new Error("trailing bytes in binary message");
+		}
 	}
 }
 
-function header(writer, type) {
+function header(writer: Writer, type: MessageType): void {
 	writer.u8(CODEC_VERSION).u8(type);
 }
 
-function checkHeader(reader, type) {
+function messageType(code: number): MessageType {
+	switch (code) {
+		case MESSAGE_TYPE.INPUT:
+			return MESSAGE_TYPE.INPUT;
+		case MESSAGE_TYPE.SNAPSHOT:
+			return MESSAGE_TYPE.SNAPSHOT;
+		default:
+			throw new Error("unknown binary message type");
+	}
+}
+
+function checkHeader(reader: Reader, type: MessageType): void {
 	const version = reader.u8();
 	if (version !== CODEC_VERSION) {
 		throw new Error(`unsupported codec version: ${version}`);
@@ -223,18 +290,22 @@ function checkHeader(reader, type) {
 	}
 }
 
-function writeBehaviors(writer, behaviors) {
+function writeBehaviors(
+	writer: Writer,
+	behaviors: BehaviorSnapshot[] | readonly unknown[],
+): void {
 	const list = Array.isArray(behaviors) ? behaviors.slice(0, 255) : [];
 	writer.u8(list.length);
 	for (const behavior of list) {
-		writer.string(behavior?.name);
-		writer.i16(signedMs(behavior?.remaining));
+		const data = isRecord(behavior) ? behavior : {};
+		writer.string(data.name);
+		writer.i16(signedMs(data.remaining));
 	}
 }
 
-function readBehaviors(reader) {
+function readBehaviors(reader: Reader): BehaviorSnapshot[] {
 	const count = reader.u8();
-	const behaviors = [];
+	const behaviors: BehaviorSnapshot[] = [];
 	for (let i = 0; i < count; i++) {
 		const name = reader.string();
 		const remainingMs = reader.i16();
@@ -246,17 +317,17 @@ function readBehaviors(reader) {
 	return behaviors;
 }
 
-function writeEntity(writer, data) {
+function writeEntity(writer: Writer, data: EntityData): void {
 	writer
 		.u16(integer(data.id, 0, 65535))
-		.u8(KINDS[data.kind] ?? 0)
-		.f32(Number(data.x) || 0)
-		.f32(Number(data.y) || 0)
-		.f32(Number(data.vx) || 0)
-		.f32(Number(data.vy) || 0)
+		.u8(KINDS[data.kind])
+		.f32(finite(Number(data.x) || 0))
+		.f32(finite(Number(data.y) || 0))
+		.f32(finite(Number(data.vx) || 0))
+		.f32(finite(Number(data.vy) || 0))
 		.i16(radians(data.angle))
 		.u16(centiseconds(data.age))
-		.f32(Number(data.radius) || 0);
+		.f32(finite(Number(data.radius) || 0));
 	writeBehaviors(writer, data.behaviors);
 
 	switch (data.kind) {
@@ -297,27 +368,26 @@ function writeEntity(writer, data) {
 			writer.string(data.color).u16(ms(data.life)).u8(particles.length);
 			for (const particle of particles) {
 				writer
-					.f32(Number(particle.x) || 0)
-					.f32(Number(particle.y) || 0)
-					.f32(Number(particle.vx) || 0)
-					.f32(Number(particle.vy) || 0)
+					.f32(finite(Number(particle.x) || 0))
+					.f32(finite(Number(particle.y) || 0))
+					.f32(finite(Number(particle.vx) || 0))
+					.f32(finite(Number(particle.vy) || 0))
 					.u16(ms(particle.ttl));
 			}
 			break;
 		}
 		default:
-			throw new Error(`unknown entity kind: ${data.kind}`);
+			assertNever(data);
 	}
 }
 
-function readEntity(reader) {
+function readEntity(reader: Reader): EntityData {
 	const id = reader.u16();
 	const kindCode = reader.u8();
-	const kind = KIND_NAMES[kindCode];
+	const kind = KIND_NAMES.get(kindCode);
 	if (!kind) throw new Error(`unknown entity kind: ${kindCode}`);
-	const data = {
+	const base = {
 		id,
-		kind,
 		x: reader.f32(),
 		y: reader.f32(),
 		vx: reader.f32(),
@@ -330,51 +400,77 @@ function readEntity(reader) {
 
 	switch (kind) {
 		case "ship":
-			data.playerId = reader.string();
-			data.color = reader.string();
-			data.hp = reader.u8();
-			data.maxHp = reader.u8();
-			data.fireDelay = reader.u16() / 1000;
-			data.cooldown = reader.u16() / 1000;
-			data.thrusting = Boolean(reader.u8());
-			break;
+			return {
+				...base,
+				kind: "ship",
+				playerId: reader.string(),
+				color: reader.string(),
+				hp: reader.u8(),
+				maxHp: reader.u8(),
+				fireDelay: reader.u16() / 1000,
+				cooldown: reader.u16() / 1000,
+				thrusting: Boolean(reader.u8()),
+			};
 		case "bullet": {
-			data.ownerId = reader.string();
+			const ownerId = reader.string();
 			const sourceSeq = reader.u32();
-			data.sourceSeq = sourceSeq === 0 ? null : sourceSeq;
-			data.ttl = reader.u16() / 1000;
-			data.damage = reader.u8();
-			break;
+			const ttl = reader.u16() / 1000;
+			const damage = reader.u8();
+			return {
+				...base,
+				kind: "bullet",
+				ownerId,
+				sourceSeq: sourceSeq === 0 ? null : sourceSeq,
+				ttl,
+				damage,
+			};
 		}
 		case "asteroid": {
-			data.hp = reader.u8();
-			data.spin = reader.i16() / 1000;
+			const hp = reader.u8();
+			const spin = reader.i16() / 1000;
 			const count = reader.u8();
-			data.shape = Array.from({ length: count }, () => reader.u8() / 100);
-			break;
+			return {
+				...base,
+				kind: "asteroid",
+				hp,
+				spin,
+				shape: Array.from({ length: count }, () => reader.u8() / 100),
+			};
 		}
-		case "pickup":
-			data.effect = reader.string();
-			data.ttl = reader.u16() / 1000;
-			break;
-		case "explosion": {
-			data.color = reader.string();
-			data.life = reader.u16() / 1000;
-			const count = reader.u8();
-			data.particles = Array.from({ length: count }, () => ({
-				x: reader.f32(),
-				y: reader.f32(),
-				vx: reader.f32(),
-				vy: reader.f32(),
+		case "pickup": {
+			const effect = EffectNameSchema.safeParse(reader.string());
+			if (!effect.success) throw new Error("unknown pickup effect");
+			return {
+				...base,
+				kind: "pickup",
+				effect: effect.data,
 				ttl: reader.u16() / 1000,
-			}));
-			break;
+			};
 		}
+		case "explosion": {
+			const color = reader.string();
+			const life = reader.u16() / 1000;
+			const count = reader.u8();
+			return {
+				...base,
+				kind: "explosion",
+				color,
+				life,
+				particles: Array.from({ length: count }, () => ({
+					x: reader.f32(),
+					y: reader.f32(),
+					vx: reader.f32(),
+					vy: reader.f32(),
+					ttl: reader.u16() / 1000,
+				})),
+			};
+		}
+		default:
+			return assertNever(kind);
 	}
-	return data;
 }
 
-export function encodeInput(input) {
+export function encodeInput(input: InputFields): ArrayBuffer {
 	const writer = new Writer();
 	header(writer, MESSAGE_TYPE.INPUT);
 	writer
@@ -386,26 +482,28 @@ export function encodeInput(input) {
 	return writer.result();
 }
 
-export function decodeInput(data) {
+export function decodeInput(data: BinarySource): InputMessage {
 	const reader = new Reader(data);
 	checkHeader(reader, MESSAGE_TYPE.INPUT);
-	return {
+	const message: InputMessage = {
 		type: "input",
-		seq: reader.u32(),
-		tick: reader.u32(),
+		seq: asSeq(reader.u32()),
+		tick: asTick(reader.u32()),
 		turn: reader.i16() / 1000,
 		thrust: Boolean(reader.u8()),
 		fire: Boolean(reader.u8()),
 	};
+	reader.finish();
+	return message;
 }
 
-export function encodeSnapshot(snapshot) {
+export function encodeSnapshot(snapshot: Snapshot): ArrayBuffer {
 	const writer = new Writer(2048);
 	header(writer, MESSAGE_TYPE.SNAPSHOT);
 	writer
 		.u32(integer(snapshot.tick, 0, 4294967295))
-		.f32(Number(snapshot.arena?.width) || 0)
-		.f32(Number(snapshot.arena?.height) || 0);
+		.f32(finite(Number(snapshot.arena?.width) || 0))
+		.f32(finite(Number(snapshot.arena?.height) || 0));
 
 	const players = Array.isArray(snapshot.players)
 		? snapshot.players.slice(0, 65535)
@@ -436,14 +534,22 @@ export function encodeSnapshot(snapshot) {
 	return writer.result();
 }
 
-export function decodeSnapshot(data) {
+function readEvents(reader: Reader): GameEvent[] {
+	const eventsLength = reader.u16();
+	const raw: unknown = JSON.parse(decoder.decode(reader.bytes(eventsLength)));
+	const parsed = GameEventSchema.array().safeParse(raw);
+	if (!parsed.success) throw new Error("invalid binary event payload");
+	return parsed.data;
+}
+
+export function decodeSnapshot(data: BinarySource): DecodedSnapshot {
 	const reader = new Reader(data);
 	checkHeader(reader, MESSAGE_TYPE.SNAPSHOT);
 	const tick = reader.u32();
 	const arena = { width: reader.f32(), height: reader.f32() };
 
 	const playerCount = reader.u16();
-	const players = [];
+	const players: PlayerSnapshot[] = [];
 	for (let i = 0; i < playerCount; i++) {
 		const id = reader.string();
 		const name = reader.string();
@@ -462,12 +568,12 @@ export function decodeSnapshot(data) {
 	}
 
 	const entityCount = reader.u16();
-	const entities = [];
+	const entities: EntityData[] = [];
 	for (let i = 0; i < entityCount; i++) entities.push(readEntity(reader));
 
-	const eventsLength = reader.u16();
-	const events = JSON.parse(decoder.decode(reader.bytes(eventsLength)));
+	const events = readEvents(reader);
 	const lastProcessedSeq = reader.u32();
+	reader.finish();
 	return {
 		type: "snapshot",
 		tick,
@@ -479,7 +585,9 @@ export function decodeSnapshot(data) {
 	};
 }
 
-export function decodeBinaryMessage(data) {
+export function decodeBinaryMessage(
+	data: BinarySource,
+): InputMessage | DecodedSnapshot {
 	const buffer = toArrayBuffer(data);
 	if (buffer.byteLength < 2) throw new Error("truncated binary message");
 	const view = new DataView(buffer);
@@ -487,20 +595,27 @@ export function decodeBinaryMessage(data) {
 	if (version !== CODEC_VERSION) {
 		throw new Error(`unsupported codec version: ${version}`);
 	}
-	switch (view.getUint8(1)) {
-		case MESSAGE_TYPE.INPUT:
-			return decodeInput(buffer);
-		case MESSAGE_TYPE.SNAPSHOT:
-			return decodeSnapshot(buffer);
-		default:
-			throw new Error("unknown binary message type");
-	}
+	const type = messageType(view.getUint8(1));
+	return type === MESSAGE_TYPE.INPUT
+		? decodeInput(buffer)
+		: decodeSnapshot(buffer);
 }
 
-export function encodeMessage(message, codec = "json") {
+const isInputFields = (value: object): value is InputFields =>
+	"seq" in value && "tick" in value && "turn" in value;
+
+const isSnapshot = (value: object): value is Snapshot =>
+	"arena" in value && "entities" in value && "players" in value;
+
+export function encodeMessage(
+	message: object,
+	codec: "json" | "binary" = "json",
+): WirePayload {
 	if (codec === "binary") {
-		if (message.type === "input") return encodeInput(message);
-		if (message.type === "snapshot") return encodeSnapshot(message);
+		if ("type" in message && message.type === "input" && isInputFields(message))
+			return encodeInput(message);
+		if ("type" in message && message.type === "snapshot" && isSnapshot(message))
+			return encodeSnapshot(message);
 	}
-	return JSON.stringify({ v: CODEC_VERSION, ...message });
+	return JSON.stringify({ v: PROTOCOL_VERSION, ...message });
 }

@@ -1,10 +1,17 @@
-import { normalizeAngle } from "../math.js";
-import { Vector2 } from "./vector.js";
+import { normalizeAngle } from "../math.ts";
+import type { EffectName } from "../types.ts";
+import type { AnyEntity, BehaviorOwner } from "./entity.ts";
+import type { Ship } from "./ship.ts";
+import { Vector2 } from "./vector.ts";
 
-// A behaviour is a plain object: { name, done, update(owner, dt) }.
-// Any entity can get any behaviour: this is composition instead of subclasses.
+export interface Behavior {
+	name: string;
+	readonly done: boolean;
+	readonly remaining?: number;
+	update(owner: BehaviorOwner, dt: number): void;
+}
 
-export function timedEffect(name, duration) {
+export function timedEffect(name: string, duration: number): Behavior {
 	let left = duration;
 	return {
 		name,
@@ -22,7 +29,12 @@ export function timedEffect(name, duration) {
 
 // Steers the owner's velocity towards the nearest target. Works for a bullet
 // and for an asteroid alike: it only needs `pos`, `vel` and `world`.
-export function homing({ canTarget, turnRate = 3, range = 500 }) {
+export function homing(options: {
+	canTarget: (owner: BehaviorOwner, other: AnyEntity) => boolean;
+	turnRate?: number;
+	range?: number;
+}): Behavior {
+	const { canTarget, turnRate = 3, range = 500 } = options;
 	return {
 		name: "homing",
 		done: false,
@@ -30,7 +42,7 @@ export function homing({ canTarget, turnRate = 3, range = 500 }) {
 			const speed = owner.vel.length();
 			if (speed === 0 || !owner.world) return;
 
-			let target = null;
+			let target: AnyEntity | null = null;
 			let best = range;
 			for (const other of owner.world) {
 				if (other === owner || !other.alive || !canTarget(owner, other))
@@ -55,7 +67,10 @@ export function homing({ canTarget, turnRate = 3, range = 500 }) {
 
 // Behaviour-as-data: a pickup only stores an effect NAME, the table below
 // says what the effect does to the ship that picks it up.
-export const EFFECTS = new Map([
+export const EFFECTS: ReadonlyMap<
+	EffectName,
+	{ label: string; color: string; apply: (ship: Ship) => void }
+> = new Map([
 	[
 		"shield",
 		{

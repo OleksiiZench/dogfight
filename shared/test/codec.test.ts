@@ -6,18 +6,23 @@ import {
 	decodeSnapshot,
 	encodeInput,
 	encodeSnapshot,
-} from "../src/protocol/codec.js";
+} from "../src/protocol/codec.ts";
+import type { Snapshot } from "../src/types.ts";
 
-function assertClose(actual, expected, path = "value") {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+function assertClose(actual: unknown, expected: unknown, path = "value"): void {
 	if (typeof expected === "number") {
 		assert.equal(typeof actual, "number", `${path} must be a number`);
 		assert.ok(
-			Math.abs(actual - expected) <= 0.011,
-			`${path}: ${actual} != ${expected}`,
+			typeof actual === "number" && Math.abs(actual - expected) <= 0.011,
+			`${path}: ${String(actual)} != ${expected}`,
 		);
 		return;
 	}
 	if (Array.isArray(expected)) {
+		assert.ok(Array.isArray(actual), `${path} must be an array`);
 		assert.equal(actual.length, expected.length, `${path} length`);
 		for (let i = 0; i < expected.length; i++) {
 			assertClose(actual[i], expected[i], `${path}[${i}]`);
@@ -25,10 +30,7 @@ function assertClose(actual, expected, path = "value") {
 		return;
 	}
 	if (expected && typeof expected === "object") {
-		assert.ok(
-			actual && typeof actual === "object",
-			`${path} must be an object`,
-		);
+		assert.ok(isRecord(actual), `${path} must be an object`);
 		for (const [key, value] of Object.entries(expected)) {
 			assertClose(actual[key], value, `${path}.${key}`);
 		}
@@ -37,7 +39,7 @@ function assertClose(actual, expected, path = "value") {
 	assert.equal(actual, expected, path);
 }
 
-const snapshot = {
+const snapshot: Snapshot = {
 	type: "snapshot",
 	tick: 42,
 	arena: { width: 1280, height: 720 },

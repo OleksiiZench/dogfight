@@ -1,24 +1,26 @@
-export function lerp(a, b, t) {
+import type { Rng } from "./types.ts";
+
+export function lerp(a: number, b: number, t: number): number {
 	return a + (b - a) * t;
 }
 
-export function clamp(value, min, max) {
+export function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
 }
 
 // wraps any angle into [-PI, PI)
-export function normalizeAngle(angle) {
+export function normalizeAngle(angle: number): number {
 	const twoPi = Math.PI * 2;
 	return angle - twoPi * Math.floor((angle + Math.PI) / twoPi);
 }
 
 // interpolates along the shortest arc
-export function lerpAngle(a, b, t) {
+export function lerpAngle(a: number, b: number, t: number): number {
 	return a + normalizeAngle(b - a) * t;
 }
 
 // small seeded PRNG (mulberry32): same seed -> same sequence
-export function createRng(seed = 1) {
+export function createRng(seed = 1): Rng {
 	let state = seed >>> 0;
 
 	const next = () => {

@@ -1,16 +1,24 @@
-import { normalizeAngle } from "../math.js";
-import { homing } from "./behaviors.js";
-import { BULLET_SPEED, Bullet } from "./bullet.js";
-import { Entity } from "./entity.js";
-import { Vector2 } from "./vector.js";
+import { normalizeAngle } from "../math.ts";
+import type { EntityId, Intent, PlayerId, Seq } from "../types.ts";
+import { homing } from "./behaviors.ts";
+import { BULLET_SPEED, Bullet } from "./bullet.ts";
+import { Entity } from "./entity.ts";
+import { Vector2 } from "./vector.ts";
 
 export const TURN_RATE = 3.5; // rad/s
 export const THRUST = 700; // px/s^2
 export const DRAG = 1.5; // 1/s
 export const MAX_SPEED = 450; // px/s
 
-export class Ship extends Entity {
-	#hp;
+export class Ship extends Entity<"ship"> {
+	#hp: number;
+
+	readonly playerId: PlayerId;
+	readonly color: string;
+	readonly maxHp: number;
+	readonly fireDelay: number;
+	cooldown: number;
+	thrusting: boolean;
 
 	constructor({
 		id = null,
@@ -23,6 +31,17 @@ export class Ship extends Entity {
 		fireDelay = 0.25,
 		cooldown = 0,
 		thrusting = false,
+	}: {
+		id?: EntityId | null;
+		playerId: PlayerId;
+		pos?: Vector2;
+		angle?: number;
+		hp?: number | null;
+		color?: string;
+		maxHp?: number;
+		fireDelay?: number;
+		cooldown?: number;
+		thrusting?: boolean;
 	}) {
 		super({ id, kind: "ship", pos, angle, radius: 22 });
 		this.playerId = playerId;
@@ -34,16 +53,16 @@ export class Ship extends Entity {
 		this.#hp = hp ?? maxHp;
 	}
 
-	get hp() {
+	get hp(): number {
 		return this.#hp;
 	}
 
-	get invulnerable() {
+	get invulnerable(): boolean {
 		return this.hasBehavior("shield") || this.hasBehavior("invuln");
 	}
 
 	// returns true if this hit destroyed the ship
-	damage(amount) {
+	damage(amount: number): boolean {
 		if (!this.alive || this.invulnerable) return false;
 		this.#hp = Math.max(0, this.#hp - amount);
 		if (this.#hp === 0) {
@@ -53,12 +72,12 @@ export class Ship extends Entity {
 		return false;
 	}
 
-	heal(amount) {
+	heal(amount: number): void {
 		this.#hp = Math.min(this.maxHp, this.#hp + amount);
 	}
 
 	// intent = { turn: -1..1, thrust: bool, fire: bool } (from keyboard or bot)
-	control(intent, dt) {
+	control(intent: Intent, dt: number): void {
 		this.angle = normalizeAngle(this.angle + intent.turn * TURN_RATE * dt);
 		this.thrusting = Boolean(intent.thrust);
 		if (this.thrusting) {
@@ -67,7 +86,7 @@ export class Ship extends Entity {
 		if (intent.fire) this.fire(intent.seq);
 	}
 
-	update(dt) {
+	override update(dt: number): void {
 		this.vel = this.vel.scale(Math.exp(-DRAG * dt));
 		const speed = this.vel.length();
 		if (speed > MAX_SPEED) this.vel = this.vel.scale(MAX_SPEED / speed);
@@ -75,7 +94,7 @@ export class Ship extends Entity {
 		this.cooldown = Math.max(0, this.cooldown - dt);
 	}
 
-	fire(sourceSeq = null) {
+	fire(sourceSeq: Seq | null = null): boolean {
 		// `this` is decided by the call site, so fail loudly when it is wrong
 		if (!(this instanceof Ship)) {
 			throw new TypeError(`Ship.fire() called with wrong this: ${this}`);

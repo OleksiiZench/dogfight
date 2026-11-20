@@ -1,8 +1,19 @@
-import { Entity } from "./entity.js";
-import { Vector2 } from "./vector.js";
+import type { EntityId, Rng } from "../types.ts";
+import { Entity } from "./entity.ts";
+import { Vector2 } from "./vector.ts";
+
+export interface Particle {
+	pos: Vector2;
+	vel: Vector2;
+	ttl: number;
+}
 
 // One entity that owns many short-lived particles (plain objects).
-export class Explosion extends Entity {
+export class Explosion extends Entity<"explosion"> {
+	readonly color: string;
+	readonly life: number;
+	readonly particles: Particle[];
+
 	constructor({
 		id = null,
 		pos,
@@ -12,6 +23,15 @@ export class Explosion extends Entity {
 		speed = 220,
 		life = 0.8,
 		particles = null,
+	}: {
+		id?: EntityId | null;
+		pos: Vector2;
+		rng?: Rng;
+		color?: string;
+		count?: number;
+		speed?: number;
+		life?: number;
+		particles?: Particle[] | null;
 	}) {
 		super({ id, kind: "explosion", pos, radius: 0, solid: false });
 		this.color = color;
@@ -21,14 +41,14 @@ export class Explosion extends Entity {
 			Array.from({ length: count }, () => ({
 				pos,
 				vel: Vector2.fromAngle(
-					rng.range(0, Math.PI * 2),
-					rng.range(speed * 0.2, speed),
+					rng?.range(0, Math.PI * 2) ?? 0,
+					rng?.range(speed * 0.2, speed) ?? 0,
 				),
-				ttl: rng.range(life * 0.5, life),
+				ttl: rng?.range(life * 0.5, life) ?? 0,
 			}));
 	}
 
-	update(dt) {
+	override update(dt: number): void {
 		this.age += dt;
 		const damping = Math.exp(-2 * dt);
 		let anyAlive = false;

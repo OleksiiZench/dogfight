@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Game } from "../src/sim/game.js";
+import { Game } from "../src/sim/game.ts";
+import type { EntityId, Intent } from "../src/types.ts";
 
-function hash(game) {
+function hash(game: Game): number {
 	let value = 2166136261;
 	const entities = [...game.world].sort((a, b) => a.id - b.id);
 	for (const entity of entities) {
@@ -31,7 +32,7 @@ function hash(game) {
 	return value >>> 0;
 }
 
-function run(seed) {
+function run(seed: number): number {
 	const game = new Game({
 		seed,
 		arena: { width: 1200, height: 700 },
@@ -39,9 +40,11 @@ function run(seed) {
 	});
 	game.addPlayer({ id: "p1", name: "Alpha", color: "#4ade80" });
 	game.start();
-	const intents = new Map([
-		[game.players.get("p1").shipId, { turn: 0.2, thrust: true, fire: true }],
-	]);
+	const player = game.players.get("p1");
+	if (!player || player.shipId === null) throw new Error("missing player ship");
+	const shipId: EntityId = player.shipId;
+	const intent: Intent = { turn: 0.2, thrust: true, fire: true };
+	const intents = new Map<EntityId, Intent>([[shipId, intent]]);
 	for (let i = 0; i < 1000; i++) game.step(1 / 60, intents);
 	return hash(game);
 }

@@ -1,10 +1,53 @@
-import { lerp, lerpAngle } from "../math.js";
-import { ARENA, wrapPosition } from "./arena.js";
-import { Vector2 } from "./vector.js";
+import { lerp, lerpAngle } from "../math.ts";
+import type { Arena, EntityId, EntityKind, PlayerId } from "../types.ts";
+import { asEntityId } from "../types.ts";
+import { ARENA, wrapPosition } from "./arena.ts";
+import type { Asteroid } from "./asteroid.ts";
+import type { Behavior } from "./behaviors.ts";
+import type { Bullet } from "./bullet.ts";
+import type { Explosion } from "./explosion.ts";
+import type { Pickup } from "./pickup.ts";
+import type { Ship } from "./ship.ts";
+import { Vector2 } from "./vector.ts";
+import type { WorldLike } from "./world.ts";
 
-export class Entity {
+export type AnyEntity = Ship | Bullet | Asteroid | Pickup | Explosion;
+
+export interface BehaviorOwner {
+	kind: EntityKind;
+	pos: Vector2;
+	vel: Vector2;
+	alive: boolean;
+	world: WorldLike | null;
+	ownerId?: PlayerId;
+}
+
+export interface EntityInit<K extends EntityKind> {
+	id?: EntityId | null;
+	kind: K;
+	pos?: Vector2;
+	vel?: Vector2;
+	angle?: number;
+	radius?: number;
+	solid?: boolean;
+}
+
+export class Entity<K extends EntityKind = EntityKind> {
 	static #nextId = 1;
-	#id;
+	#id: EntityId;
+
+	readonly kind: K;
+	pos: Vector2;
+	prevPos: Vector2;
+	vel: Vector2;
+	angle: number;
+	prevAngle: number;
+	radius: number;
+	solid: boolean;
+	alive: boolean;
+	age: number;
+	world: WorldLike | null;
+	behaviors: Behavior[];
 
 	constructor({
 		id = null,
@@ -14,8 +57,8 @@ export class Entity {
 		angle = 0,
 		radius = 10,
 		solid = true,
-	}) {
-		this.#id = id ?? Entity.#nextId++;
+	}: EntityInit<K>) {
+		this.#id = id ?? asEntityId(Entity.#nextId++);
 		this.kind = kind;
 		this.pos = pos;
 		this.prevPos = pos;
@@ -31,53 +74,55 @@ export class Entity {
 		this.behaviors = [];
 	}
 
-	get id() {
+	get id(): EntityId {
 		return this.#id;
 	}
 
 	// called by World at the start of every step, before input and update
-	savePrevious() {
+	savePrevious(): void {
 		this.prevPos = this.pos;
 		this.prevAngle = this.angle;
 	}
 
-	update(dt) {
+	update(dt: number): void {
 		this.runBehaviors(dt);
 		this.pos = this.pos.add(this.vel.scale(dt));
 		this.handleEdges();
 		this.age += dt;
 	}
 
-	handleEdges() {
-		this.pos = wrapPosition(this.pos, this.world?.arena ?? ARENA);
+	handleEdges(): void {
+		const arena: Arena = this.world?.arena ?? ARENA;
+		this.pos = wrapPosition(this.pos, arena);
 	}
 
-	kill() {
+	kill(): void {
 		this.alive = false;
 	}
 
-	addBehavior(behavior) {
+	addBehavior(behavior: Behavior): this {
 		const index = this.behaviors.findIndex((b) => b.name === behavior.name);
 		if (index >= 0) this.behaviors[index] = behavior;
 		else this.behaviors.push(behavior);
 		return this;
 	}
 
-	hasBehavior(name) {
+	hasBehavior(name: string): boolean {
 		return this.behaviors.some((b) => b.name === name);
 	}
 
-	runBehaviors(dt) {
+	runBehaviors(dt: number): void {
 		for (let i = this.behaviors.length - 1; i >= 0; i--) {
 			const behavior = this.behaviors[i];
+			if (!behavior) continue;
 			behavior.update(this, dt);
 			if (behavior.done) this.behaviors.splice(i, 1);
 		}
 	}
 
 	// interpolated position for rendering (alpha in [0, 1))
-	renderPos(alpha) {
-		const arena = this.world?.arena ?? ARENA;
+	renderPos(alpha: number): Vector2 {
+		const arena: Arena = this.world?.arena ?? ARENA;
 		const jumped =
 			Math.abs(this.pos.x - this.prevPos.x) > arena.width / 2 ||
 			Math.abs(this.pos.y - this.prevPos.y) > arena.height / 2;
@@ -89,7 +134,7 @@ export class Entity {
 		);
 	}
 
-	renderAngle(alpha) {
+	renderAngle(alpha: number): number {
 		return lerpAngle(this.prevAngle, this.angle, alpha);
 	}
 }

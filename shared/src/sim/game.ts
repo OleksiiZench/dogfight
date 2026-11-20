@@ -1,11 +1,21 @@
-import { createRng } from "../math.js";
-import { serializeEntity, serializeEvent } from "../protocol/snapshot.js";
-import { randomPoint } from "./arena.js";
-import { Asteroid } from "./asteroid.js";
-import { EFFECTS, homing, timedEffect } from "./behaviors.js";
-import { Pickup } from "./pickup.js";
-import { Ship } from "./ship.js";
-import { World } from "./world.js";
+import { createRng } from "../math.ts";
+import { serializeEntity, serializeEvent } from "../protocol/snapshot.ts";
+import type {
+	Arena,
+	EntityId,
+	GameEvent,
+	Intent,
+	PlayerId,
+	Rng,
+	Snapshot,
+} from "../types.ts";
+import { randomPoint } from "./arena.ts";
+import { Asteroid } from "./asteroid.ts";
+import { EFFECTS, homing, timedEffect } from "./behaviors.ts";
+import { Pickup } from "./pickup.ts";
+import { Ship } from "./ship.ts";
+import { Vector2 } from "./vector.ts";
+import { World } from "./world.ts";
 
 export const RESPAWN_DELAY = 2;
 const KILL_SCORE = 100;
@@ -15,12 +25,36 @@ const ASTEROID_DELAY = 2;
 const PICKUP_MAX = 2;
 const PICKUP_INTERVAL = 8;
 
+export interface Player {
+	id: PlayerId;
+	name: string;
+	color: string;
+	fireDelay: number;
+	score: number;
+	ship: Ship | null;
+	shipId: EntityId | null;
+	respawnIn: number | null;
+}
+
 export class Game {
+	readonly rng: Rng;
+	readonly arena: Arena;
+	readonly world: World;
+	readonly players: Map<PlayerId, Player>;
+	asteroidTarget: number;
+	asteroidTimer: number;
+	pickupTimer: number;
+
 	constructor({
 		seed = 1,
 		arena,
 		asteroidTarget = ASTEROID_TARGET,
 		idStart = 1,
+	}: {
+		seed?: number;
+		arena?: Arena;
+		asteroidTarget?: number;
+		idStart?: number;
 	} = {}) {
 		this.rng = createRng(seed);
 		this.arena = arena ?? { width: 1600, height: 900 };
@@ -31,8 +65,18 @@ export class Game {
 		this.pickupTimer = PICKUP_INTERVAL;
 	}
 
-	addPlayer({ id, name, color, fireDelay = 0.25 }) {
-		const player = {
+	addPlayer({
+		id,
+		name,
+		color,
+		fireDelay = 0.25,
+	}: {
+		id: PlayerId;
+		name: string;
+		color: string;
+		fireDelay?: number;
+	}): Player {
+		const player: Player = {
 			id,
 			name,
 			color,
@@ -47,7 +91,7 @@ export class Game {
 		return player;
 	}
 
-	removePlayer(id) {
+	removePlayer(id: PlayerId): Player | null {
 		const player = this.players.get(id);
 		if (!player) return null;
 		if (player.ship) this.world.despawn(player.ship.id);
@@ -55,11 +99,14 @@ export class Game {
 		return player;
 	}
 
-	start() {
+	start(): void {
 		for (let i = 0; i < this.asteroidTarget; i++) this.spawnAsteroid();
 	}
 
-	step(dt, intents = new Map()) {
+	step(
+		dt: number,
+		intents: ReadonlyMap<EntityId, Intent> = new Map(),
+	): GameEvent[] {
 		this.world.step(dt, intents);
 		const events = this.processEvents();
 		this.updateRespawns(dt);
@@ -68,14 +115,15 @@ export class Game {
 		return events;
 	}
 
-	processEvents() {
-		const events = [];
+	processEvents(): GameEvent[] {
+		const events: GameEvent[] = [];
 		let scoresChanged = false;
 		for (const event of this.world.drainEvents()) {
-			const killer = this.players.get(event.killerId);
+			const killerId = "killerId" in event ? event.killerId : null;
+			const killer = killerId ? this.players.get(killerId) : undefined;
 
 			if (event.type === "shipDestroyed") {
-				const victim = this.players.get(event.ship?.playerId);
+				const victim = this.players.get(event.ship.playerId);
 				if (victim) victim.respawnIn = RESPAWN_DELAY;
 				if (killer && killer !== victim) {
 					killer.score += KILL_SCORE;
@@ -100,7 +148,7 @@ export class Game {
 		return events;
 	}
 
-	updateRespawns(dt) {
+	updateRespawns(dt: number): void {
 		for (const player of this.players.values()) {
 			if (player.respawnIn === null) continue;
 			player.respawnIn -= dt;
@@ -108,7 +156,7 @@ export class Game {
 		}
 	}
 
-	spawnShip(player) {
+	spawnShip(player: Player): void {
 		const ship = new Ship({
 			id: this.world.nextId(),
 			playerId: player.id,
@@ -123,7 +171,7 @@ export class Game {
 		player.respawnIn = null;
 	}
 
-	spawnAsteroid() {
+	spawnAsteroid(): void {
 		const asteroid = Asteroid.random(
 			this.rng,
 			this.findSafeSpot(250),
@@ -141,8 +189,8 @@ export class Game {
 		this.world.spawn(asteroid);
 	}
 
-	findSafeSpot(minDistance) {
-		let best = null;
+	findSafeSpot(minDistance: number): Vector2 {
+		let best: Vector2 | null = null;
 		let bestClearance = -Infinity;
 
 		for (let attempt = 0; attempt < 20; attempt++) {
@@ -162,10 +210,10 @@ export class Game {
 				best = point;
 			}
 		}
-		return best;
+		return best ?? new Vector2();
 	}
 
-	maintainAsteroids(dt) {
+	maintainAsteroids(dt: number): void {
 		let count = 0;
 		for (const _ of this.world.ofKind("asteroid")) count++;
 		if (count >= this.asteroidTarget) {
@@ -179,7 +227,7 @@ export class Game {
 		}
 	}
 
-	maintainPickups(dt) {
+	maintainPickups(dt: number): void {
 		let count = 0;
 		for (const _ of this.world.ofKind("pickup")) count++;
 		if (count >= PICKUP_MAX) return;
@@ -191,12 +239,12 @@ export class Game {
 			new Pickup({
 				id: this.world.nextId(),
 				pos: this.findSafeSpot(120),
-				effect: this.rng.pick([...EFFECTS.keys()]),
+				effect: this.rng.pick([...EFFECTS.keys()]) ?? "shield",
 			}),
 		);
 	}
 
-	snapshot(tick = 0) {
+	snapshot(tick = 0): Snapshot {
 		return {
 			type: "snapshot",
 			tick,

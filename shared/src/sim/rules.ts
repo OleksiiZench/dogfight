@@ -1,9 +1,24 @@
-import { EFFECTS, timedEffect } from "./behaviors.js";
-import { Explosion } from "./explosion.js";
+import type { Asteroid } from "./asteroid.ts";
+import { EFFECTS, timedEffect } from "./behaviors.ts";
+import type { Bullet } from "./bullet.ts";
+import type { AnyEntity } from "./entity.ts";
+import { Explosion } from "./explosion.ts";
+import type { Pickup } from "./pickup.ts";
+import type { Ship } from "./ship.ts";
+import type { WorldLike } from "./world.ts";
 
 const ASTEROID_DAMAGE = 25;
 
-function explode(world, entity, options) {
+function explode(
+	world: WorldLike,
+	entity: AnyEntity,
+	options: {
+		color?: string;
+		count?: number;
+		speed?: number;
+		life?: number;
+	},
+): void {
 	world.spawn(
 		new Explosion({
 			id: world.nextId(),
@@ -14,7 +29,7 @@ function explode(world, entity, options) {
 	);
 }
 
-function bulletHitsShip(bullet, ship, world) {
+function bulletHitsShip(bullet: Bullet, ship: Ship, world: WorldLike): void {
 	if (!bullet.alive || !ship.alive) return;
 	if (bullet.ownerId === ship.playerId) return;
 
@@ -27,7 +42,11 @@ function bulletHitsShip(bullet, ship, world) {
 	}
 }
 
-function bulletHitsAsteroid(bullet, asteroid, world) {
+function bulletHitsAsteroid(
+	bullet: Bullet,
+	asteroid: Asteroid,
+	world: WorldLike,
+): void {
 	if (!bullet.alive || !asteroid.alive) return;
 
 	bullet.kill();
@@ -39,7 +58,11 @@ function bulletHitsAsteroid(bullet, asteroid, world) {
 	}
 }
 
-function shipHitsAsteroid(ship, asteroid, world) {
+function shipHitsAsteroid(
+	ship: Ship,
+	asteroid: Asteroid,
+	world: WorldLike,
+): void {
 	if (!ship.alive || !asteroid.alive) return;
 
 	// push the ship out and reflect its velocity off the asteroid
@@ -59,24 +82,47 @@ function shipHitsAsteroid(ship, asteroid, world) {
 	}
 }
 
-function shipTakesPickup(ship, pickup, world) {
+function shipTakesPickup(ship: Ship, pickup: Pickup, world: WorldLike): void {
 	if (!ship.alive || !pickup.alive) return;
 	pickup.kill();
 	EFFECTS.get(pickup.effect)?.apply(ship);
 	world.emit({ type: "pickup", effect: pickup.effect, pos: pickup.pos });
 }
 
-// handler(a, b) is called with a.kind and b.kind in the order of the key
-const HANDLERS = new Map([
-	["bullet:ship", bulletHitsShip],
-	["bullet:asteroid", bulletHitsAsteroid],
-	["ship:asteroid", shipHitsAsteroid],
-	["ship:pickup", shipTakesPickup],
-]);
-
-export function resolveCollision(a, b, world) {
-	const direct = HANDLERS.get(`${a.kind}:${b.kind}`);
-	if (direct) return direct(a, b, world);
-	const swapped = HANDLERS.get(`${b.kind}:${a.kind}`);
-	if (swapped) return swapped(b, a, world);
+export function resolveCollision(
+	a: AnyEntity,
+	b: AnyEntity,
+	world: WorldLike,
+): void {
+	if (a.kind === "bullet" && b.kind === "ship") {
+		bulletHitsShip(a, b, world);
+		return;
+	}
+	if (b.kind === "bullet" && a.kind === "ship") {
+		bulletHitsShip(b, a, world);
+		return;
+	}
+	if (a.kind === "bullet" && b.kind === "asteroid") {
+		bulletHitsAsteroid(a, b, world);
+		return;
+	}
+	if (b.kind === "bullet" && a.kind === "asteroid") {
+		bulletHitsAsteroid(b, a, world);
+		return;
+	}
+	if (a.kind === "ship" && b.kind === "asteroid") {
+		shipHitsAsteroid(a, b, world);
+		return;
+	}
+	if (b.kind === "ship" && a.kind === "asteroid") {
+		shipHitsAsteroid(b, a, world);
+		return;
+	}
+	if (a.kind === "ship" && b.kind === "pickup") {
+		shipTakesPickup(a, b, world);
+		return;
+	}
+	if (b.kind === "ship" && a.kind === "pickup") {
+		shipTakesPickup(b, a, world);
+	}
 }
