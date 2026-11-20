@@ -8,8 +8,8 @@ import type { ServerConfig } from "./config.ts";
 import { LatencyInjector } from "./latency.ts";
 import type { Logger } from "./logger.ts";
 import {
+	emptyRejectionCounts,
 	type Metrics,
-	REJECTION_REASONS,
 	type RejectionReason,
 } from "./metrics.ts";
 import { createRateLimiter, heartbeat } from "./policy.ts";
@@ -133,9 +133,7 @@ export function attachWebSocket(
 		bytesOut: 0,
 		inputs: 0,
 		snapshots: 0,
-		rejections: Object.fromEntries(
-			REJECTION_REASONS.map((reason) => [reason, 0]),
-		) as Record<RejectionReason, number>,
+		rejections: emptyRejectionCounts(),
 	};
 	const latency = new LatencyInjector(config);
 

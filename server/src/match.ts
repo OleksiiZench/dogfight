@@ -248,6 +248,15 @@ export class Match extends EventEmitter<MatchEvents> {
 		};
 	}
 
+	resetStats(): void {
+		this.stats.ticks = 0;
+		this.stats.durations.length = 0;
+		this.stats.jitter.length = 0;
+		this.stats.lastDuration = 0;
+		this.stats.lastJitter = 0;
+		this.stats.previousTick = null;
+	}
+
 	getStats(): MatchStatsSummary {
 		const mean = (values: readonly number[]): number =>
 			values.length

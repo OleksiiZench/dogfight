@@ -1,17 +1,19 @@
 {
   "clientKill": {
-    "beforeControlP99Ms": 1.8136759999999867,
-    "afterControlP99Ms": 1.8136759999999867,
+    "beforeControlP99Ms": 0.5613840000000891,
+    "afterControlP99Ms": 0.3622429999995802,
     "playersAfter": 1
   },
   "garbageFlood": {
-    "attemptedFrames": 1000,
+    "attemptedFrames": 500,
+    "durationMs": 5000,
+    "ratePerSecond": 100,
     "closeCode": 4001,
-    "payloadRejections": 90,
-    "beforeControlP99Ms": 1.8136759999999867,
-    "afterControlP99Ms": 1.8136759999999867
+    "payloadRejections": 500,
+    "beforeControlP99Ms": 0.47407600000042294,
+    "afterControlP99Ms": 0.26143499999852793
   },
-  "serverKill": {
+  "gracefulShutdown": {
     "shutdownReason": "server shutdown",
     "closeCode": 1001,
     "reconnectDelayMs": 500,
@@ -22,18 +24,18 @@
     "players": 2,
     "wsClients": 2,
     "messages": {
-      "in": 245,
-      "out": 169
+      "in": 2339,
+      "out": 4345
     },
     "bytes": {
-      "in": 15591,
-      "out": 426473
+      "in": 168174,
+      "out": 5126528
     },
     "rejections": {
       "origin": 0,
       "ip_limit": 0,
-      "payload": 90,
-      "rate_limit": 910,
+      "payload": 500,
+      "rate_limit": 0,
       "join_timeout": 0,
       "slow_client": 0,
       "policy": 0
@@ -41,14 +43,14 @@
     "ticks": [
       {
         "room": "chaos-a",
-        "p99DurationMs": 2.142112999999995
+        "p99DurationMs": 0.41219700000146986
       },
       {
         "room": "chaos-b",
-        "p99DurationMs": 1.8136759999999867
+        "p99DurationMs": 0.26143499999852793
       }
     ],
     "eventLoopUtilization": 1,
-    "rss": 147226624
+    "rss": 195153920
   }
 }

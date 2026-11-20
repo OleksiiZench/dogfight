@@ -4,12 +4,6 @@ export interface ProfileMeasure {
 	duration: number;
 }
 
-interface MeasureEntry {
-	name: string;
-	startTime: number;
-	duration: number;
-}
-
 const PREFIX = "dogfight:";
 let enabled = false;
 let counter = 0;
@@ -48,9 +42,7 @@ export function measureProfile<T>(name: string, run: () => T): T {
 }
 
 export function profileMeasures(limit = 4000): ProfileMeasure[] {
-	const entries = performance.getEntriesByType(
-		"measure",
-	) as unknown as MeasureEntry[];
+	const entries = performance.getEntriesByType("measure");
 	return entries
 		.filter((entry) => entry.name.startsWith(PREFIX))
 		.slice(-limit)

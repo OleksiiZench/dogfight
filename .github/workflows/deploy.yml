@@ -53,6 +53,8 @@ jobs:
           file: Dockerfile
           load: true
           push: false
+          build-args: |
+            VERSION=${{ github.ref_name }}
           tags: ${{ steps.image.outputs.image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

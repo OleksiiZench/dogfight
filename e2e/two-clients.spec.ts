@@ -7,8 +7,18 @@ interface Point {
 
 async function ensureTrainingRoom(page: Page): Promise<void> {
 	const response = await page.request.get("/api/rooms");
-	const rooms = (await response.json()) as Array<{ id?: unknown }>;
-	if (rooms.some((room) => room.id === "training")) return;
+	const rooms: unknown = await response.json();
+	if (!Array.isArray(rooms)) throw new Error("expected a list of rooms");
+	if (
+		rooms.some(
+			(room) =>
+				typeof room === "object" &&
+				room !== null &&
+				"id" in room &&
+				room.id === "training",
+		)
+	)
+		return;
 	await page.request.post("/api/rooms", {
 		data: {
 			id: "training",

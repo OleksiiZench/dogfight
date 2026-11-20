@@ -30,7 +30,8 @@
     npm run test     # Vitest: client + server + shared
     npm run coverage # Vitest coverage, поріг 85%
     npm run test:e2e # Playwright: два клієнти в одній кімнаті
-    npm run lint     # Biome
+    npm run lint     # Biome + type-aware ESLint
+    npm run lint:types # no-floating-promises / no-misused-promises
     npm run typecheck # root + client + server + shared (tsc --noEmit)
     npm run benchmark:netcode  # JSON vs binary, 30 Гц, 4 гравці
     npm run record:netcode     # 20-секундний GIF двох вікон (потрібен ffmpeg)
@@ -45,7 +46,7 @@
 
 ## Структура
 
-    tsconfig.base.tson            strict TS-опції для всього workspace
+    tsconfig.base.json            strict TS-опції для всього workspace
     shared/src/types.ts           брендовані id, Result, ProtocolFailure, assertNever
     shared/src/protocol/schema.ts Zod v4 — source of truth для JSON-повідомлень
     shared/src/protocol/codec.ts  DataView v1, little-endian, перевірка діапазонів
@@ -191,12 +192,12 @@ in-place `Vector2` (`set`, `addInPlace`, `scaleInPlace`), тому спільн�
 
 ## Лаба 3 — асинхронність: завантаження, лобі, звук
 
-Умови: [`lab-03-async-javascript.md`](../Programming-Practice-Projects/courses/javascript/lab-03-async-javascript.md),
-нотатки: [`lab-03-async-javascript.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-03-async-javascript.notes.md).
+Умови: [`lab-03-async-javascript.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-03-async-javascript.md),
+нотатки: [`lab-03-async-javascript.notes.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-03-async-javascript.notes.md).
 
 ### Що додано
 
-**M1 — асети й екран завантаження.** `public/assets/manifest.tson` перелічує
+**M1 — асети й екран завантаження.** `public/assets/manifest.json` перелічує
 спрайтшит, чотири WAV-звуки й опис арени; усі файли згенеровані локально, без
 мережі. `client/src/assets/loader.ts` містить `fetchJson` (перевіряє `response.ok`),
 `loadImage`, `loadAudio`, `loadJson` (кожен приймає `AbortSignal`), `withRetry`
@@ -216,14 +217,14 @@ canvas (`client/src/ui/loading.ts`) справжнім баром `done/total`.
 (`client/src/events/bus.ts`), а `audio.ts` і `client/src/ui/hud.ts` слухають `fired`, `hit`,
 `exploded`, `pickup`, `scoreChanged`.
 
-**M3 — лобі.** `server/data/rooms.tson` — три кімнати зі своїми seed і розміром
+**M3 — лобі.** `server/data/rooms.json` — три кімнати зі своїми seed і розміром
 арени. `client/src/net/lobby.ts` (`extends EventTarget`) робить `refresh()` кожні 4 с,
 кожен запит має `AbortSignal.any([controller.signal, AbortSignal.timeout(6000)])`,
 а `leave()` все скасовує — осиротілих відповідей немає. Рендеринг лобі
 повністю окремий: `client/src/ui/lobbyView.ts` лише слухає події. Вибір кімнати задає
 seed, арену і кількість астероїдів для нової `Game`.
 
-**M4 — головоломки й галерея.** Нижче. Тег `lab-03` створюється після
+**M4 — головоломки й галерея.** Нижче. Тег `lab-03` створено після
 фінальної перевірки.
 
 ### Режими для перевірки
@@ -427,7 +428,7 @@ createWriteStream(LOG_DIR/<room>-<timestamp>.ndjson)` зібраний чере�
 
 ### M4 — зловживання, RSS і event loop
 
-Ліміти за замовчуванням: 20 повідомлень/с на з'єднання (token bucket),
+Ліміти за замовчуванням: 90 повідомлень/с на з'єднання (token bucket),
 `maxPayload = 4096`, 8 гравців на кімнату, 50 кімнат, тіло POST до 8 KB.
 Якщо `socket.bufferedAmount > 1 MB`, некритичні повідомлення відкидаються
 (`droppedMessages` у `/health`); понад 4 MB — критичне повідомлення не шлеться,
@@ -541,9 +542,9 @@ HTTP-клієнт) і в політиці `bufferedAmount` для WS-сокет�
 ## Лаба 5 — Real-Time Networking
 
 Умови:
-[`lab-05-realtime-networking.md`](../Programming-Practice-Projects/courses/javascript/lab-05-realtime-networking.md),
+[`lab-05-realtime-networking.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-05-realtime-networking.md),
 нотатки:
-[`lab-05-realtime-networking.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-05-realtime-networking.notes.md).
+[`lab-05-realtime-networking.notes.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-05-realtime-networking.notes.md).
 
 Три проблеми, які вирішує ця лаба: **consistency** (два клієнти не можуть мати
 різні світи), **fairness/cheating** (клієнт не має вирішувати, де він знаходиться)
@@ -577,7 +578,7 @@ RTT, вік snapshot, bytes/s, pending inputs і correction.
 
 Перевірка детермінізації: тимчасово додав `Math.random()` у
 `shared/src/sim/ship.ts`, prediction і сервер розійшлися — correction підскочила
-до 262px; скріншот збережено. Потім код повернуто, `npm run test` і build
+до 129.7px; скріншот збережено. Потім код повернуто, `npm run test` і build
 перевірені знову.
 
 ![Netgraph із великою корекцією після навмисного порушення детермінізації](docs/assets/lab-05-corrections.png)
@@ -697,8 +698,8 @@ big-endian — `1` (`0x0001`). Саме тому протокол явно пи�
 
 ## Лаба 6 — strict TypeScript
 
-Умови: [`lab-06-typescript.md`](../Programming-Practice-Projects/courses/javascript/lab-06-typescript.md),
-нотатки: [`lab-06-typescript.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-06-typescript.notes.md).
+Умови: [`lab-06-typescript.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-06-typescript.md),
+нотатки: [`lab-06-typescript.notes.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-06-typescript.notes.md).
 
 ### Що зроблено
 
@@ -711,6 +712,9 @@ tsconfig.json` у root і `--workspaces --if-present` у всіх пакетах
 Усі `.js`/`.mjs` перейменовано на `.ts`/`.mts`, у `.nvmrc` і `engines` — Node 26.
 Запуск і тести йдуть через native type stripping Node (`process.features.typescript
 === "strip"`), без `tsx`/`ts-node` і без проміжного JS.
+`eslint.config.mjs` підключає `typescript-eslint` із `projectService: true` і
+правила `no-floating-promises`/`no-misused-promises`; `npm run lint` виконує
+Biome разом із type-aware ESLint.
 
 **M2 — типи замість «просто об'єктів».** `shared/src/types.ts` описує брендовані
 `EntityId`, `Seq`, `Tick`, а також `PlayerId`, `Result`, `ProtocolFailure` і
@@ -734,8 +738,8 @@ codec, snapshot mapper і рендері. `Room`, `RoomManager` і `Match` ма�
 через `EffectNameSchema`.
 
 **M4 — CI й документування.** `.github/workflows/ci.yml` виконує `npm ci`,
-`npm run typecheck`, `npm test`, `npm run lint`, `npm run build` на Node з
-`.nvmrc`. Цей README оновлено під `.ts`-структуру; у Лабі 5 виправлено розмір
+`npm run typecheck`, `npm test`, `npm run lint` (Biome + ESLint), `npm run build`
+на Node з `.nvmrc`. Цей README оновлено під `.ts`-структуру; у Лабі 5 виправлено розмір
 input: 14 байт, а не 13 (2 байти заголовка + 4 + 4 + 2 + 1 + 1).
 
 ### What TypeScript found
@@ -771,9 +775,11 @@ input: 14 байт, а не 13 (2 байти заголовка + 4 + 4 + 2 + 1 
    — помилки протоколу стали значенням із `CLOSE`, а не `throw` у довільному
    місці; Zod-парсери повертають той самий `Result`.
 
-Локалізовані `as` лишилося рівно два: `branded<B>()` у `shared/src/types.ts`
-(єдине місце створення брендів) і `detailOf<T>()` у `client/src/events/bus.ts`
-(`CustomEvent<T>` не виводиться з `EventTarget`). Обидва мають коментар.
+Локалізовані касти типів (окрім `as const` і `keyof`) лишилося рівно два:
+`branded<B>()` у `shared/src/types.ts` (єдине місце створення брендів) і
+`detailOf<T>()` у `client/src/events/bus.ts`
+(`CustomEvent<T>` не виводиться з `EventTarget`). Обидва мають коментар;
+решту кастів із Lab 7/8 замінено на явні guards/annotation.
 Явного `any`, `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck` та імпортів
 `.js` немає; пошук `\bany\b` знаходить лише коментарі й `AbortSignal.any`.
 
@@ -793,21 +799,21 @@ DOM тут тонкий: LoadingScreen, LobbyView, HUD, ChatView і NetGraph м�
     npm run build
     npm run benchmark:netcode
 
-Очікувано: typecheck проходить у root/client/server/shared; Biome перевіряє
-88 файлів без fixing; 19 тестів (client 5, server 10, shared 4); build дає
-`✓ 137 modules transformed`; benchmark повторює Лабу 5 — `4267/692 bytes,
-10 entities` для snapshot і 14 байт на input. У CI виконується той самий
-набір, окрім benchmark.
+Очікувано: typecheck проходить у root/client/server/shared; Biome + ESLint
+перевіряють 119 файлів без fixing; 158 тестів (client 20, server 26, shared 112);
+build дає `✓ 140 modules transformed`; benchmark повторює Лабу 5 —
+`4267/692 bytes, 10 entities` для snapshot і 14 байт на input. У CI виконується
+той самий набір, окрім benchmark.
 
 ## Лаба 7 — движок, пам'ять і тести
 
-Умови: [`lab-07-engine-performance-testing.md`](../Programming-Practice-Projects/courses/javascript/lab-07-engine-performance-testing.md),
-нотатки: [`lab-07-engine-performance-testing.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-07-engine-performance-testing.notes.md).
+Умови: [`lab-07-engine-performance-testing.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-07-engine-performance-testing.md),
+нотатки: [`lab-07-engine-performance-testing.notes.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-07-engine-performance-testing.notes.md).
 
 ### M1 — тести
 
 `npm test` запускає Vitest у трьох проєктах (root config з `projects` для
-`client`, `server`, `shared`): **22 файли, 147 тестів**. Серед них 7
+`client`, `server`, `shared`): **24 файли, 158 тестів**. Серед них 7
 властивостей fast-check у `shared/test/properties.test.ts`: round-trip codec у
 межах tolerance, довжина input/snapshot, «довільний сміттєвий буфер ніколи не
 падає», корабель лишається в арені протягом 1000 кроків, парсер приймає
@@ -815,7 +821,8 @@ DOM тут тонкий: LoadingScreen, LobbyView, HUD, ChatView і NetGraph м�
 акумулятора (`client/test/loop.test.ts`) і heartbeat/rate-limit
 (`server/test/policy.test.ts`), чисту реконсиляцію
 (`client/src/net/reconcile.ts`) і unit-тести нових гарячих шляхів (`Vector2`,
-pool, spatial hash).
+pool, spatial hash). Окремо `client/test/assets.test.ts` перевіряє retry,
+backoff, abort і прогрес/фолбеки `loadAll`.
 
 `npm run coverage`: **93.75% statements / 85.86% branches / 93.64% functions /
 94.30% lines**, `shared/src/sim` — 96.86% statements; поріг 85% проходить.
@@ -982,8 +989,8 @@ downstream ~152 MiB/s. Пам'ять не головний обмежник (RSS
 
 ## Лаба 8 — Ship It
 
-Умови: [`lab-08-ship-it.md`](../Programming-Practice-Projects/courses/javascript/lab-08-ship-it.md),
-нотатки: [`lab-08-ship-it.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-08-ship-it.notes.md).
+Умови: [`lab-08-ship-it.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-08-ship-it.md),
+нотатки: [`lab-08-ship-it.notes.md`](https://github.com/rmalkevy/Programming-Practice-Projects/blob/main/courses/javascript/lab-08-ship-it.notes.md).
 
 Архітектура продакшн-контуру:
 [![architecture](docs/assets/lab-08-architecture.svg)](docs/assets/lab-08-architecture.svg).
@@ -999,15 +1006,17 @@ Prometheus-текст із `dogfight_build_info`, rooms/players/ws_clients,
 messages/bytes, tick p99 per room, event-loop utilization, RSS і rejections за
 причиною.
 
-`SIGTERM` перемикає `ready=false`, дає 50 мс на in-flight health-запити, шле
-клієнтам `{ type: "shutdown", reason }`, закриває WS з кодом `1001`, закриває
-HTTP-сервер, логи й матчі, потім виходить 0. `uncaughtException` і
+`SIGTERM` перемикає `ready=false`, виконує shutdown-хуки (клієнтам шле
+`{ type: "shutdown", reason }`, WS закривається з кодом `1001`, логи й матчі
+закриваються), витримує 50 мс, потім закриває HTTP-сервер і виходить 0.
+`uncaughtException` і
 `unhandledRejection` логуються структурованим pino-рядком і завершують процес
 з кодом 1 — supervisor має перезапустити чистий стан. Pino пише події
 `server.listening`, `ws.connected`, `player.joined`, `player.left`,
 `shutdown.start`, `shutdown.complete`, `ws.rejected` з полями `roomId`,
 `playerId`, `reason` тощо. Версія з `VERSION`/`GIT_SHA`/`git rev-parse` потрапляє
-і в HUD (`__APP_VERSION__`), і в `/health`.
+і в HUD (`__APP_VERSION__`), і в `/health`; Docker-збірка отримує `VERSION`
+через build-arg, тому HUD і `/health` показують той самий тег.
 
 ### M2 — hardening and chaos
 
@@ -1023,16 +1032,19 @@ origin check.
 [svg](docs/assets/lab-08-chaos.svg),
 [markdown](docs/assets/lab-08-chaos.md):
 
-| Сценарій                | Результат                                                                                         |
-| ----------------------- | ------------------------------------------------------------------------------------------------- |
-| Kill клієнта mid-match  | кімната `chaos-a` 2 → 1 гравець; p99 контрольної кімнати 1.81 → 1.81 мс                           |
-| 1000 сміттєвих кадрів/с | close `4001`, 90 payload rejections + 910 rate_limit, p99 контрольної 1.81 → 1.81 мс              |
-| Kill сервера mid-match  | `shutdown reason="server shutdown"`, close `1001`, reconnect через 500 мс, `hello` після рестарту |
+p99 контрольної кімнати вимірюється на свіжому вікні 120 тіків для кожного
+сценарію; shutdown-сценарій — це коректне закриття в процесі, не kill ОС.
+
+| Сценарій                    | Результат                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------- |
+| Kill клієнта mid-match      | кімната `chaos-a` 2 → 1 гравець; p99 контрольної кімнати 0.56 → 0.36 мс                           |
+| 500 сміттєвих кадрів за 5 с | close `4001`, 500 payload rejections, p99 контрольної кімнати 0.47 → 0.26 мс                      |
+| Graceful shutdown mid-match | `shutdown reason="server shutdown"`, close `1001`, reconnect через 500 мс, `hello` після рестарту |
 
 Клієнт на `shutdown` закриває матч, повертається в лобі, показує окремий
 `.lobby-notice` і продовжує reconnect із backoff; це покрито e2e-тестом
-`shutdown returns the client to the lobby with a notice`. Загалом: **23 файли,
-153 тести**, e2e — 2 тести, coverage — 93.75% statements / 85.86% branches /
+`shutdown returns the client to the lobby with a notice`. Загалом: **24 файли,
+158 тестів**, e2e — 2 тести, coverage — 93.75% statements / 85.86% branches /
 93.64% functions / 94.30% lines.
 
 ### M3 — контейнер і пайплайн
@@ -1084,7 +1096,7 @@ heartbeats переживають idle timeout. `fly.toml` тримає один
 | Browser (Lab 7)  | frame p99 / hitch >50 мс      | 16.8 мс / 0                                | [summary](docs/assets/lab-07-profile-after/lab-07-summary-after.json)                                                                         |
 | Server (Lab 7)   | capacity                      | 64 WS + 16 ботів, tick p99 33.68 мс        | [load chart](docs/assets/lab-07-load.svg)                                                                                                     |
 | Worker (Lab 7)   | decision                      | no-go, transfer повільніший за main thread | [worker](docs/assets/lab-07-worker.svg)                                                                                                       |
-| Chaos (Lab 8)    | control-room p99 during flood | 1.81 → 1.81 мс                             | [chaos](docs/assets/lab-08-chaos.svg)                                                                                                         |
+| Chaos (Lab 8)    | control-room p99 during flood | 0.47 → 0.26 мс                             | [chaos](docs/assets/lab-08-chaos.svg)                                                                                                         |
 
 ### Known limitations and what is next
 
@@ -1097,11 +1109,13 @@ heartbeats переживають idle timeout. `fly.toml` тримає один
   авторизований.
 - **Capacity 64 WS + 16 ботів.** Далі bottleneck — CPU симуляції й serialization;
   горизонтальне масштабування потребує попереднього пункту про стан.
-- **Deploy artifacts are prepared, not live.** Після пушу `v1.0.0` треба
-  підтвердити image size, Fly health, WSS і real-RTT сесію.
+- **Deploy artifacts are prepared, not live.** Спочатку `git push origin main`
+  без тегів, щоб перевірити CI; лише потім push фінального `v*` тега, бо він
+  запускає deploy. Після deploy треба підтвердити image size, Fly health, WSS і
+  real-RTT сесію.
 
 ### Tag history
 
 `lab-01` … `lab-07` — локальні теги етапів. Фінальні теги Lab 8 — `lab-08` і
-`v1.0.0` — створюються локально після фінального quality gate; `v*` у remote
+`v1.0.0` — створено локально після фінального quality gate; `v*` у remote
 запускає deploy workflow.

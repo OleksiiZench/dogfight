@@ -7,6 +7,8 @@ COPY shared/package.json shared/
 RUN npm ci
 
 FROM deps AS build
+ARG VERSION=dev
+ENV VERSION=${VERSION}
 COPY tsconfig.json tsconfig.base.json ./
 COPY client/index.html client/
 COPY client/vite.config.ts client/

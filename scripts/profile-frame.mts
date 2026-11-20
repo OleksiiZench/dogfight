@@ -74,6 +74,72 @@ interface Summary {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
+const isNumberArray = (value: unknown): value is number[] =>
+	Array.isArray(value) && value.every((entry) => typeof entry === "number");
+
+function expectCpuProfile(value: unknown): CpuProfile {
+	if (!isRecord(value) || !Array.isArray(value.nodes))
+		throw new Error("Profiler.stop returned no CPU profile");
+	const nodes: CpuProfileNode[] = value.nodes.map((node) => {
+		if (!isRecord(node) || typeof node.id !== "number")
+			throw new Error("invalid CPU profile node");
+		const callFrame = isRecord(node.callFrame) ? node.callFrame : undefined;
+		return {
+			id: node.id,
+			parent: typeof node.parent === "number" ? node.parent : undefined,
+			callFrame: callFrame
+				? {
+						functionName:
+							typeof callFrame.functionName === "string"
+								? callFrame.functionName
+								: undefined,
+						url: typeof callFrame.url === "string" ? callFrame.url : undefined,
+						lineNumber:
+							typeof callFrame.lineNumber === "number"
+								? callFrame.lineNumber
+								: undefined,
+					}
+				: undefined,
+			hitCount: typeof node.hitCount === "number" ? node.hitCount : undefined,
+		};
+	});
+	return {
+		nodes,
+		samples: isNumberArray(value.samples) ? value.samples : undefined,
+		startTime:
+			typeof value.startTime === "number" ? value.startTime : undefined,
+		endTime: typeof value.endTime === "number" ? value.endTime : undefined,
+	};
+}
+
+function expectLoopStats(value: unknown): LoopStatsSample {
+	if (
+		!isRecord(value) ||
+		!isNumberArray(value.frameTimes) ||
+		!isNumberArray(value.workTimes) ||
+		typeof value.framesPerSecond !== "number"
+	)
+		throw new Error("invalid loop stats sample");
+	return {
+		frameTimes: value.frameTimes,
+		workTimes: value.workTimes,
+		framesPerSecond: value.framesPerSecond,
+	};
+}
+
+function expectMeasures(value: unknown): ProfileMeasure[] {
+	if (!Array.isArray(value)) throw new Error("expected a list of measures");
+	return value.map((measure) => {
+		if (
+			!isRecord(measure) ||
+			typeof measure.name !== "string" ||
+			typeof measure.duration !== "number"
+		)
+			throw new Error("invalid profile measure");
+		return { name: measure.name, duration: measure.duration };
+	});
+}
+
 function option(name: string, fallback: string): string {
 	const prefix = `--${name}=`;
 	const found = process.argv.find((arg) => arg.startsWith(prefix));
@@ -329,16 +395,24 @@ async function traceEvents(
 	if (!stream) return [];
 	let raw = "";
 	while (true) {
-		const chunk = (await cdp.send("IO.read", {
+		const chunk: unknown = await cdp.send("IO.read", {
 			handle: stream,
 			size: 1024 * 1024,
-		})) as unknown as { data: string; eof: boolean };
+		});
+		if (
+			!isRecord(chunk) ||
+			typeof chunk.data !== "string" ||
+			typeof chunk.eof !== "boolean"
+		)
+			throw new Error("invalid IO.read response");
 		raw += chunk.data;
 		if (chunk.eof) break;
 	}
 	const parsed: unknown = JSON.parse(raw);
 	if (!isRecord(parsed) || !Array.isArray(parsed.traceEvents)) return [];
-	return parsed.traceEvents.filter(isRecord) as TraceEvent[];
+	return parsed.traceEvents.filter((event): event is TraceEvent =>
+		isRecord(event),
+	);
 }
 
 async function main(): Promise<void> {
@@ -403,31 +477,39 @@ async function main(): Promise<void> {
 		});
 		await page.keyboard.up("Space");
 		await page.keyboard.up("ArrowUp");
-		const stopped = (await cdp.send("Profiler.stop")) as unknown as {
-			profile: CpuProfile;
-		};
-		const loop = (await page.evaluate(() => ({
+		const stoppedRaw: unknown = await cdp.send("Profiler.stop");
+		if (!isRecord(stoppedRaw))
+			throw new Error("invalid Profiler.stop response");
+		const profile = expectCpuProfile(stoppedRaw.profile);
+		const loopRaw: unknown = await page.evaluate(() => ({
 			frameTimes: [...(window.__dogfight?.loop.stats.frameTimes ?? [])],
 			workTimes: [...(window.__dogfight?.loop.stats.workTimes ?? [])],
 			framesPerSecond: window.__dogfight?.loop.stats.framesPerSecond ?? 0,
-		}))) as LoopStatsSample;
-		const browserMeasures = (await page.evaluate(
+		}));
+		const loop = expectLoopStats(loopRaw);
+		const browserMeasuresRaw: unknown = await page.evaluate(
 			() => window.__dogfight?.profile.measures() ?? [],
-		)) as ProfileMeasure[];
-		const serverMeasures = (await (
+		);
+		const browserMeasures = expectMeasures(browserMeasuresRaw);
+		const serverMeasuresRaw: unknown = await (
 			await fetch(`http://127.0.0.1:${port}/api/profile`)
-		).json()) as { measures: ProfileMeasure[] };
+		).json();
+		if (!isRecord(serverMeasuresRaw))
+			throw new Error("invalid /api/profile response");
+		const serverMeasures = {
+			measures: expectMeasures(serverMeasuresRaw.measures),
+		};
 		await page.screenshot({
 			path: resolve(outDir, `lab-07-profile-${label}.png`),
 			fullPage: true,
 		});
 		await writeFile(
 			resolve(outDir, `lab-07-cpu-${label}.cpuprofile.json`),
-			JSON.stringify(stopped.profile, null, 2),
+			JSON.stringify(profile, null, 2),
 		);
 		await writeFile(
 			resolve(outDir, `lab-07-flame-${label}.svg`),
-			flameGraph(stopped.profile),
+			flameGraph(profile),
 		);
 		await writeFile(
 			resolve(outDir, `lab-07-frames-${label}.csv`),
@@ -468,7 +550,7 @@ async function main(): Promise<void> {
 					.sort(([a], [b]) => a.localeCompare(b))
 					.map(([name, values]) => summarize(name, values)),
 			),
-			hotFunctions: hotFunctions(stopped.profile),
+			hotFunctions: hotFunctions(profile),
 		};
 		await context.close();
 	} finally {

@@ -21,12 +21,14 @@ interface ChaosReport {
 	};
 	garbageFlood: {
 		attemptedFrames: number;
+		durationMs: number;
+		ratePerSecond: number;
 		closeCode: number | undefined;
 		payloadRejections: number;
 		beforeControlP99Ms: number;
 		afterControlP99Ms: number;
 	};
-	serverKill: {
+	gracefulShutdown: {
 		shutdownReason: string;
 		closeCode: number | undefined;
 		reconnectDelayMs: number;
@@ -123,6 +125,74 @@ async function connect(
 	return { ws, messages, closed };
 }
 
+async function floodOnce(port: number): Promise<{
+	sent: boolean;
+	code: number | undefined;
+}> {
+	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+	const closed = new Promise<number | undefined>((resolveClosed) => {
+		ws.once("close", (code: number) => resolveClosed(code));
+	});
+	await new Promise<void>((resolveOpen, rejectOpen) => {
+		const timer = setTimeout(
+			() => rejectOpen(new Error("flood socket did not open")),
+			5000,
+		);
+		ws.once("open", () => {
+			clearTimeout(timer);
+			resolveOpen();
+		});
+		ws.once("error", rejectOpen);
+	});
+	ws.send(
+		JSON.stringify({
+			v: 1,
+			type: "join",
+			room: "chaos-a",
+			name: "Flood",
+			codec: "json",
+		}),
+	);
+	try {
+		ws.send("{not json");
+	} catch {
+		return { sent: false, code: await closed };
+	}
+	return { sent: true, code: await closed };
+}
+
+async function floodGarbage(
+	port: number,
+	durationMs: number,
+	ratePerSecond: number,
+): Promise<{
+	attemptedFrames: number;
+	durationMs: number;
+	closeCode: number | undefined;
+}> {
+	const batchIntervalMs = 100;
+	const batchSize = Math.max(
+		1,
+		Math.round((ratePerSecond * batchIntervalMs) / 1000),
+	);
+	const deadline = Date.now() + durationMs;
+	let attemptedFrames = 0;
+	let closeCode: number | undefined;
+	for (
+		let batchStart = Date.now();
+		batchStart < deadline;
+		batchStart += batchIntervalMs
+	) {
+		const results = await Promise.all(
+			Array.from({ length: batchSize }, () => floodOnce(port)),
+		);
+		attemptedFrames += results.filter((result) => result.sent).length;
+		closeCode ??= results.find((result) => result.code !== undefined)?.code;
+		await sleep(Math.max(0, batchStart + batchIntervalMs - Date.now()));
+	}
+	return { attemptedFrames, durationMs, closeCode };
+}
+
 function startInputs(client: ChaosClient, seqStart = 0): void {
 	let seq = seqStart;
 	client.timer = setInterval(() => {
@@ -160,7 +230,8 @@ async function waitForMessage(
 }
 
 async function roomPlayers(base: string, room: string): Promise<number> {
-	const rooms = (await fetchJson(`${base}/api/rooms`)) as unknown[];
+	const rooms: unknown = await fetchJson(`${base}/api/rooms`);
+	if (!Array.isArray(rooms)) throw new Error("expected a list of rooms");
 	for (const entry of rooms) {
 		const value = expectRecord(entry, "room");
 		if (value.id === room) return expectNumber(value.players, "room.players");
@@ -183,6 +254,19 @@ async function waitForPlayers(
 
 function controlP99(app: Awaited<ReturnType<typeof createApp>>): number {
 	return app.matches.get("chaos-b")?.getStats().p99DurationMs ?? 0;
+}
+
+function resetControlStats(app: Awaited<ReturnType<typeof createApp>>): void {
+	app.matches.get("chaos-b")?.resetStats();
+}
+
+async function freshControlP99(
+	app: Awaited<ReturnType<typeof createApp>>,
+	windowMs = 4500,
+): Promise<number> {
+	resetControlStats(app);
+	await sleep(windowMs);
+	return controlP99(app);
 }
 
 function assertIsolated(before: number, after: number): void {
@@ -211,7 +295,7 @@ function svg(report: ChaosReport): string {
 }
 
 function markdown(report: ChaosReport): string {
-	return `# Lab 08 chaos test\n\n| Scenario | Result |\n| --- | --- |\n| Client kill | room went to ${report.clientKill.playersAfter} player; control p99 ${report.clientKill.beforeControlP99Ms.toFixed(2)} → ${report.clientKill.afterControlP99Ms.toFixed(2)} ms |\n| Garbage flood | ${report.garbageFlood.attemptedFrames} frames attempted, close ${report.garbageFlood.closeCode}, ${report.garbageFlood.payloadRejections} payload rejections; control p99 ${report.garbageFlood.beforeControlP99Ms.toFixed(2)} → ${report.garbageFlood.afterControlP99Ms.toFixed(2)} ms |\n| Server kill | shutdown reason “${report.serverKill.shutdownReason}”, close ${report.serverKill.closeCode}, reconnect after ${report.serverKill.reconnectDelayMs} ms, hello ${report.serverKill.helloAfterReconnect} |\n\nMetrics snapshot: ${JSON.stringify(report.metrics)}\n`;
+	return `# Lab 08 chaos test\n\n| Scenario | Result |\n| --- | --- |\n| Client kill | room went to ${report.clientKill.playersAfter} player; control p99 ${report.clientKill.beforeControlP99Ms.toFixed(2)} → ${report.clientKill.afterControlP99Ms.toFixed(2)} ms |\n| Garbage flood | ${report.garbageFlood.attemptedFrames} frames over ${report.garbageFlood.durationMs} ms (${report.garbageFlood.ratePerSecond}/s target), close ${report.garbageFlood.closeCode}, ${report.garbageFlood.payloadRejections} payload rejections; control p99 ${report.garbageFlood.beforeControlP99Ms.toFixed(2)} → ${report.garbageFlood.afterControlP99Ms.toFixed(2)} ms |\n| Graceful shutdown | shutdown reason “${report.gracefulShutdown.shutdownReason}”, close ${report.gracefulShutdown.closeCode}, reconnect after ${report.gracefulShutdown.reconnectDelayMs} ms, hello ${report.gracefulShutdown.helloAfterReconnect} |\n\nControl-room p99 is measured over a fresh 120-tick window per scenario. The shutdown scenario is an in-process graceful close, not an OS-level kill.\n\nMetrics snapshot: ${JSON.stringify(report.metrics)}\n`;
 }
 
 const outDir = resolve(option("out", "docs/assets"));
@@ -248,6 +332,7 @@ const baseConfig = {
 	roomsFile,
 	maxRooms: 2,
 	maxPlayersPerRoom: 8,
+	maxConnectionsPerIp: 1000,
 	pingIntervalMs: 60000,
 };
 
@@ -267,47 +352,27 @@ startInputs(bravo, 100);
 startInputs(control, 200);
 await sleep(1000);
 
-const beforeClientKill = controlP99(app);
+const beforeClientKill = await freshControlP99(app);
 bravo.ws.terminate();
 await waitForPlayers(base, "chaos-a", 1);
-await sleep(500);
+await sleep(4500);
 const afterClientKill = controlP99(app);
 assertIsolated(beforeClientKill, afterClientKill);
 
-const beforeFlood = controlP99(app);
-const garbage = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-await new Promise<void>((resolveOpen) =>
-	garbage.once("open", () => resolveOpen()),
-);
-const garbageJoined = new Promise<void>((resolveJoin) => {
-	garbage.on("message", function handler(data: unknown) {
-		if (decodeMessage(data)?.type === "welcome") {
-			garbage.off("message", handler);
-			resolveJoin();
-		}
-	});
-});
-garbage.send(
-	JSON.stringify({
-		v: 1,
-		type: "join",
-		room: "chaos-a",
-		name: "Flood",
-		codec: "json",
-	}),
-);
-await garbageJoined;
-const garbageClosed = new Promise<number | undefined>((resolveClosed) => {
-	garbage.once("close", (code: number) => resolveClosed(code));
-});
-for (let i = 0; i < 1000; i++) {
-	try {
-		garbage.send("{not json");
-	} catch {}
-}
-const garbageCode = await garbageClosed;
-await sleep(500);
+const beforeFlood = await freshControlP99(app);
+resetControlStats(app);
+const floodRatePerSecond = Number(option("flood-rate", "100"));
+const floodDurationMs = Number(option("flood-duration", "5000"));
+if (
+	!Number.isFinite(floodRatePerSecond) ||
+	floodRatePerSecond <= 0 ||
+	!Number.isFinite(floodDurationMs) ||
+	floodDurationMs <= 0
+)
+	throw new Error("invalid flood options");
+const flood = await floodGarbage(port, floodDurationMs, floodRatePerSecond);
 const afterFlood = controlP99(app);
+assert.ok(flood.attemptedFrames > 0, "no garbage frames were sent");
 assertIsolated(beforeFlood, afterFlood);
 await fetch(`${base}/metrics`).then((response) => response.text());
 const metrics = expectRecord(app.metrics.snapshot(), "metrics");
@@ -342,13 +407,15 @@ const report: ChaosReport = {
 		playersAfter: 1,
 	},
 	garbageFlood: {
-		attemptedFrames: 1000,
-		closeCode: garbageCode,
+		attemptedFrames: flood.attemptedFrames,
+		durationMs: flood.durationMs,
+		ratePerSecond: floodRatePerSecond,
+		closeCode: flood.closeCode,
 		payloadRejections,
 		beforeControlP99Ms: beforeFlood,
 		afterControlP99Ms: afterFlood,
 	},
-	serverKill: {
+	gracefulShutdown: {
 		shutdownReason: shutdown.reason ?? "server shutdown",
 		closeCode: shutdownCode,
 		reconnectDelayMs,

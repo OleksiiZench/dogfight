@@ -13,6 +13,18 @@ export const REJECTION_REASONS = [
 
 export type RejectionReason = (typeof REJECTION_REASONS)[number];
 
+export function emptyRejectionCounts(): Record<RejectionReason, number> {
+	return {
+		origin: 0,
+		ip_limit: 0,
+		payload: 0,
+		rate_limit: 0,
+		join_timeout: 0,
+		slow_client: 0,
+		policy: 0,
+	};
+}
+
 export interface TickMetric {
 	room: string;
 	p99DurationMs: number;
@@ -90,18 +102,28 @@ export function createMetrics(): Metrics {
 
 	for (const reason of REJECTION_REASONS) rejections.inc({ reason }, 0);
 
-	const state = {
+	const state: {
+		messagesIn: number;
+		messagesOut: number;
+		bytesIn: number;
+		bytesOut: number;
+		rejections: Record<RejectionReason, number>;
+		rooms: number;
+		players: number;
+		wsClients: number;
+		ticks: TickMetric[];
+		eventLoopUtilization: number;
+		rss: number;
+	} = {
 		messagesIn: 0,
 		messagesOut: 0,
 		bytesIn: 0,
 		bytesOut: 0,
-		rejections: Object.fromEntries(
-			REJECTION_REASONS.map((reason) => [reason, 0]),
-		),
+		rejections: emptyRejectionCounts(),
 		rooms: 0,
 		players: 0,
 		wsClients: 0,
-		ticks: [] as TickMetric[],
+		ticks: [],
 		eventLoopUtilization: 0,
 		rss: 0,
 	};
