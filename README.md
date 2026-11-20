@@ -4,8 +4,8 @@
 ухиляються від астероїдів і збирають пікапи. Server-authoritative WebSocket
 рушій, бінарний протокол, prediction/reconciliation, PWA і Prometheus-метрики.
 
-**Грати:** https://dogfight-oleksii-waw.fly.dev (`fly.toml` і
-`.github/workflows/deploy.yml` готові). Локально — `npm install && npm run dev`.
+**Грати:** https://dogfight-oleksii-waw.fly.dev (live `v1.0.2`). Локально —
+`npm install && npm run dev`.
 
 ![Два гравці в одній кімнаті з netgraph](docs/assets/lab-05-two-player.gif)
 
@@ -1066,28 +1066,42 @@ production-like запуск: `docker compose up --build`.
 `flyctl deploy --remote-only --image ... --env VERSION=$TAG`. Розмір image і
 тег з'являються в Job Summary. Fly.io обрано тому, що WebSocket-и підтримуються
 edge-проксі, TLS/WSS завершується на платформі, а 15-секундні серверні
-heartbeats переживають idle timeout. `fly.toml` тримає один інстанс у `waw`,
+heartbeats переживають idle timeout. `fly.toml` тримає один інстанс у `arn`,
 `/ready` health check, `kill_signal = "SIGTERM"` і `kill_timeout = "10s"`.
 
-> ⚠️ locally docker/flyctl/gh недоступні, тому live-результат перевірки розміру,
-> WSS URL і `/health` з версією тага мають бути підтверджені після пушу й
-> додавання repository secret `FLY_API_TOKEN`.
+Live-стан підтверджено: Deploy #3 для `v1.0.2` завершився success, Job Summary
+показує image 65 MB, а `GET https://dogfight-oleksii-waw.fly.dev/health`
+повертає `ok: true`, `ready: true`, `version: "v1.0.2"`. Клієнт підключається
+до того самого хоста через `wss://dogfight-oleksii-waw.fly.dev/ws`, тобто
+TLS/WSS завершується на Fly edge.
 
 ### M4 — launch checklist
 
 - **PWA:** `vite-plugin-pwa` генерує `manifest.webmanifest`, `sw.js`,
   `registerSW.js` і precache; іконки 192/512 лежать у `client/public/icons`.
   Server віддає `.webmanifest` з коректним MIME.
-- **Uptime monitor:** після деплою додати externals checker на
-  `GET https://dogfight-oleksii-waw.fly.dev/health` раз на хвилину.
+- **Uptime monitor:** externals checker опитує
+  `GET https://dogfight-oleksii-waw.fly.dev/health` раз на 3 хвилини.
+  [Скріншот монітора](docs/assets/lab-08-proof/03-uptime-health.png).
 - **Phone install:** Open in browser → Add to Home screen → запустити без адресного
-  рядка. Цей крок вимагає реального телефона й публічного URL.
-- **Two strangers / real RTT:** локально перевірено двома браузерами; строгий
-  DoD вимагає двох людей з різних мереж. Після деплою записати їх анонімізовані
-  netgraph/RTT-числа й додати video/GIF у цей розділ.
-- **Demo video:** 3–5 хв (геймплей двома вікнами → архітектура → deep dive з
-  prediction/GC) має бути записаний після реальної сесії; локальний
-  [GIF](docs/assets/lab-05-two-player.gif) лишається попередньою демонстрацією.
+  рядка. [Fullscreen HUD на мобільному](docs/assets/lab-08-proof/04-mobile-hud.jpg).
+- **Two browsers / local RTT:** демо нижче показує два клієнти в одній кімнаті,
+  netgraph і RTT ≈ 88/71 мс. Строгий DoD вимагає двох людей з різних мереж;
+  цей запис лишається локальною перевіркою.
+- **Demo:** [два клієнти, netgraph і HUD `v1.0.2`](docs/assets/lab-08-proof/01-demo-two-clients-v1.0.2.mp4)
+  (1:08). Попередній локальний [GIF](docs/assets/lab-05-two-player.gif) лишається
+  додатковою демонстрацією.
+
+### Lab 08 — proof artifacts
+
+- [Demo video](docs/assets/lab-08-proof/01-demo-two-clients-v1.0.2.mp4) —
+  геймплей двома вікнами, netgraph/RTT, HUD `v1.0.2`.
+- [Deploy Job Summary](docs/assets/lab-08-proof/02-deploy-image-size.png) —
+  image-size guard: контейнер 65 MB при ліміті 200 MB.
+- [Uptime checker](docs/assets/lab-08-proof/03-uptime-health.png) —
+  `/health` доступний, інтервал перевірки 3 хвилини.
+- [Mobile/fullscreen HUD](docs/assets/lab-08-proof/04-mobile-hud.jpg) —
+  запуск гри на мобільному екрані.
 
 ### Consolidated measurements
 
@@ -1099,6 +1113,7 @@ heartbeats переживають idle timeout. `fly.toml` тримає один
 | Server (Lab 7)   | capacity                      | 64 WS + 16 ботів, tick p99 33.68 мс        | [load chart](docs/assets/lab-07-load.svg)                                                                                                     |
 | Worker (Lab 7)   | decision                      | no-go, transfer повільніший за main thread | [worker](docs/assets/lab-07-worker.svg)                                                                                                       |
 | Chaos (Lab 8)    | control-room p99 during flood | 0.47 → 0.26 мс                             | [chaos](docs/assets/lab-08-chaos.svg)                                                                                                         |
+| Deploy (Lab 8)   | container image               | 65 MB (<200 MB)                            | [proof](docs/assets/lab-08-proof/02-deploy-image-size.png)                                                                                    |
 
 ### Known limitations and what is next
 
@@ -1111,13 +1126,13 @@ heartbeats переживають idle timeout. `fly.toml` тримає один
   авторизований.
 - **Capacity 64 WS + 16 ботів.** Далі bottleneck — CPU симуляції й serialization;
   горизонтальне масштабування потребує попереднього пункту про стан.
-- **Deploy artifacts are prepared, not live.** Спочатку `git push origin main`
-  без тегів, щоб перевірити CI; лише потім push фінального `v*` тега, бо він
-  запускає deploy. Після deploy треба підтвердити image size, Fly health, WSS і
-  real-RTT сесію.
+- **Deploy verified for `v1.0.2`.** CI, Deploy, image size (65 MB), `/health`
+  і same-host WSS підтверджено після пушу; це не замінює строгу сесію з двох
+  різних мереж.
 
 ### Tag history
 
 `lab-01` … `lab-07` — локальні теги етапів. Фінальні теги Lab 8 — `lab-08` і
 `v1.0.0` — створено локально після фінального quality gate; `v1.0.1` фіксує
-audit-fixи. `v*` у remote запускає deploy workflow.
+audit-fixи; `v1.0.2` виправляє відображення астероїдів і пікапів. `v*` у remote
+запускає deploy workflow; поточний live-тег — `v1.0.2`.
