@@ -1117,5 +1117,5 @@ heartbeats переживають idle timeout. `fly.toml` тримає один
 ### Tag history
 
 `lab-01` … `lab-07` — локальні теги етапів. Фінальні теги Lab 8 — `lab-08` і
-`v1.0.0` — створено локально після фінального quality gate; `v*` у remote
-запускає deploy workflow.
+`v1.0.0` — створено локально після фінального quality gate; `v1.0.1` фіксує
+audit-fixи. `v*` у remote запускає deploy workflow.
