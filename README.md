@@ -698,9 +698,13 @@ tsconfig.json` у root і `--workspaces --if-present` у всіх пакетах
 `assertNever`.
 Повідомлення та сутності — discriminated unions, кожен `switch` на `kind`/`type`
 завершується `assertNever`: новий вид не збереться, доки його не оброблено в
-codec, snapshot mapper і рендері. Виправлено старі антипатерни: interface merging
-в `sim/entity.ts` прибрано, `Ship.control` більше не `override`, а `sim/rules.ts`
-не повертає `void`-функцію зі стрілки.
+codec, snapshot mapper і рендері. `Room`, `RoomManager` і `Match` мають власні
+карти подій для `EventEmitter`, а клієнтський `Bus<GameEvents>` виводить ключі
+з union `GameEvent`. Snapshot і всі вкладені дані оголошено `readonly`;
+`ReadonlyDeep` працює на рівні типів і не змінює runtime-поведінку Zod-парсерів.
+Виправлено старі антипатерни: interface merging в `sim/entity.ts` прибрано,
+`Ship.control` більше не `override`, а `sim/rules.ts` не повертає `void`-функцію
+зі стрілки.
 
 **M3 — runtime validation.** `shared/src/protocol/schema.ts` — Zod v4-схема для
 `ClientMessage`/`ServerMessage` із `PROTOCOL_VERSION = 1` і кодами `CLOSE`.
@@ -731,6 +735,10 @@ input: 14 байт, а не 13 (2 байти заголовка + 4 + 4 + 2 + 1 
   явні типи для CDP-сесії, stdout-подій і WS-адреси.
 - `verbatimModuleSyntax` змусив розділити `import type` і значення, а
   `erasableSyntaxOnly` — прибрати parameter properties, які не можна strip-нути.
+- `EventEmitter` без параметра подій і `EventTarget` із невідомим `detail`
+  пропускали помилкові назви та payload; тепер ключі й дані виводяться з типів.
+- `readonly` на snapshot одразу показав мутацію в тесті reconciliation і
+  необхідність копіювати `shape` для `Asteroid`.
 
 ### Три типи, які варто відзначити
 
