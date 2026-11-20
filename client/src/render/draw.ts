@@ -282,6 +282,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, stats: LoopStats): void {
 		`frames/s:   ${stats.framesPerSecond.toFixed(1)}`,
 		`frame time: ${stats.frameTime.toFixed(2)} ms`,
 		`work time:  ${stats.workTime.toFixed(2)} ms`,
+		`build:      ${__APP_VERSION__}`,
 	];
 
 	ctx.save();

@@ -11,13 +11,18 @@ import { HttpError, handleApi, sendJson } from "./http/router.ts";
 import { serveStatic } from "./http/static.ts";
 import type { MatchLog } from "./log/matchlog.ts";
 import { attachMatchLog } from "./log/matchlog.ts";
+import { createLogger } from "./logger.ts";
 import { Match } from "./match.ts";
+import { createMetrics } from "./metrics.ts";
 import type { Room } from "./rooms.ts";
 import { RoomManager } from "./rooms.ts";
 import { attachWebSocket } from "./ws.ts";
 
 export async function createApp(config: ServerConfig = loadConfig()) {
 	setProfileEnabled(process.env.PROFILE === "1");
+	const logger = createLogger(config);
+	const metrics = createMetrics();
+	metrics.setBuild(config.version);
 	await mkdir(config.logDir, { recursive: true });
 	const definitionsValue: unknown = JSON.parse(
 		await readFile(config.roomsFile, "utf8"),
@@ -33,17 +38,20 @@ export async function createApp(config: ServerConfig = loadConfig()) {
 	const sockets = new Set<Socket>();
 	const closeHooks: Array<() => void | Promise<void>> = [];
 	const startedAt = Date.now();
+	let ready = false;
 	let closing: Promise<void> | null = null;
 
 	const server = createServer((req, res) => {
 		void handleRequest(req, res);
 	});
-	server.on("error", (error: Error) => console.error("[http]", error.message));
+	server.on("error", (error: Error) =>
+		logger.error({ event: "http.error", err: error }, error.message),
+	);
 	server.on("connection", (socket: Socket) => {
 		sockets.add(socket);
 		socket.on("close", () => sockets.delete(socket));
 		socket.on("error", (error: Error) =>
-			console.error("[socket]", error.message),
+			logger.warn({ event: "socket.error", err: error }, error.message),
 		);
 	});
 
@@ -89,20 +97,30 @@ export async function createApp(config: ServerConfig = loadConfig()) {
 		logs.clear();
 	});
 
-	const gameServer = attachWebSocket(server, { config, rooms });
+	const gameServer = attachWebSocket(server, {
+		config,
+		rooms,
+		logger,
+		metrics,
+	});
 	closeHooks.push(() => gameServer.close());
 
 	async function handleRequest(
 		req: IncomingMessage,
 		res: ServerResponse,
 	): Promise<void> {
-		if (closing) {
+		const url = new URL(req.url ?? "/", "http://localhost");
+		const observe =
+			url.pathname === "/health" ||
+			url.pathname === "/ready" ||
+			url.pathname === "/metrics" ||
+			url.pathname.startsWith("/api/");
+		if (closing && !observe) {
 			sendJson(res, 503, { ok: false, error: "server is shutting down" });
 			return;
 		}
-		const url = new URL(req.url ?? "/", "http://localhost");
 		try {
-			if (url.pathname === "/health" || url.pathname.startsWith("/api/")) {
+			if (observe) {
 				const handled = await handleApi(req, res, url, {
 					config,
 					rooms,
@@ -110,12 +128,18 @@ export async function createApp(config: ServerConfig = loadConfig()) {
 					gameServer,
 					matches,
 					logCount: logs.size,
+					metrics,
+					ready,
 				});
 				if (!handled) sendJson(res, 404, { error: "unknown endpoint" });
 				return;
 			}
 			await serveStatic(req, res, config.clientDist);
 		} catch (error) {
+			logger.error(
+				{ event: "http.request_error", err: error },
+				"request failed",
+			);
 			if (res.headersSent || res.destroyed) return;
 			sendJson(res, error instanceof HttpError ? error.status : 500, {
 				error: error instanceof Error ? error.message : String(error),
@@ -131,6 +155,15 @@ export async function createApp(config: ServerConfig = loadConfig()) {
 			};
 			const onListening = (): void => {
 				server.off("error", onError);
+				ready = true;
+				logger.info(
+					{
+						event: "server.listening",
+						host: config.host,
+						port: config.port,
+					},
+					"server listening",
+				);
 				resolveListen();
 			};
 			server.once("error", onError);
@@ -141,22 +174,26 @@ export async function createApp(config: ServerConfig = loadConfig()) {
 
 	async function close(): Promise<void> {
 		if (closing) return closing;
+		ready = false;
+		logger.info({ event: "shutdown.start" }, "shutting down");
 		closing = (async () => {
 			for (const hook of closeHooks) {
 				try {
 					await hook();
 				} catch (error) {
-					console.error(
-						"[shutdown]",
-						error instanceof Error ? error.message : String(error),
+					logger.error(
+						{ event: "shutdown.hook_error", err: error },
+						"shutdown hook failed",
 					);
 				}
 			}
+			await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50));
 			const stopped = new Promise<void>((resolveClosed) =>
 				server.close(() => resolveClosed()),
 			);
 			for (const socket of sockets) socket.destroy();
 			await stopped;
+			logger.info({ event: "shutdown.complete" }, "shutdown complete");
 		})();
 		return closing;
 	}
@@ -169,6 +206,8 @@ export async function createApp(config: ServerConfig = loadConfig()) {
 		sockets,
 		gameServer,
 		closeHooks,
+		logger,
+		metrics,
 		listen,
 		close,
 	};
@@ -180,15 +219,29 @@ const isMain =
 
 if (isMain) {
 	const app = await createApp();
+	const { logger } = app;
 	let stopping = false;
 	const shutdown = (signal: string): void => {
 		if (stopping) return;
 		stopping = true;
-		console.log(`[server] ${signal}, shutting down`);
+		logger.info({ event: "process.signal", signal }, "received signal");
 		void app.close().then(() => process.exit(0));
 	};
 	for (const signal of ["SIGINT", "SIGTERM"])
 		process.once(signal, () => shutdown(signal));
+	process.on("uncaughtException", (error: Error) => {
+		logger.fatal(
+			{ event: "process.uncaught_exception", err: error },
+			error.message,
+		);
+		process.exit(1);
+	});
+	process.on("unhandledRejection", (reason: unknown) => {
+		logger.fatal(
+			{ event: "process.unhandled_rejection", err: reason },
+			"unhandled rejection",
+		);
+		process.exit(1);
+	});
 	await app.listen();
-	console.log(`[server] http://${app.config.host}:${app.config.port}`);
 }

@@ -24,7 +24,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: lab-07-artifacts
+          name: lab-08-artifacts
           path: |
             coverage
             playwright-report

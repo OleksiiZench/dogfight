@@ -275,6 +275,12 @@ export class Connection extends EventTarget {
 		this.send({ type: "leave" });
 	}
 
+	clearJoin(): void {
+		this.joinRequest = null;
+		this.roomId = null;
+		this.queue.splice(0);
+	}
+
 	chat(text: string): void {
 		const net = text.match(/^\/net\s+(\d+)\s+(\d+)\s+([0-9.]+)$/);
 		if (net) {

@@ -4,6 +4,7 @@ import { profileMeasures } from "shared/profile.ts";
 import type { ServerConfig } from "../config.ts";
 import { listReplays, replayPath, streamReplay } from "../log/replay.ts";
 import type { Match } from "../match.ts";
+import type { Metrics } from "../metrics.ts";
 import type { RoomManager } from "../rooms.ts";
 import type { GameServer } from "../ws.ts";
 
@@ -76,6 +77,8 @@ export interface ApiContext {
 	gameServer?: GameServer;
 	matches?: ReadonlyMap<string, Match>;
 	logCount?: number;
+	metrics: Metrics;
+	ready: boolean;
 }
 
 export async function handleApi(
@@ -91,12 +94,16 @@ export async function handleApi(
 		gameServer,
 		matches = new Map<string, Match>(),
 		logCount = 0,
+		metrics,
+		ready,
 	} = context;
 
 	if (url.pathname === "/health") {
 		if (req.method !== "GET") methodNotAllowed(res, "GET");
 		sendJson(res, 200, {
 			ok: true,
+			ready,
+			version: config.version,
 			uptimeMs: Date.now() - startedAt,
 			rss: process.memoryUsage().rss,
 			rooms: rooms.rooms.size,
@@ -104,6 +111,38 @@ export async function handleApi(
 			droppedMessages: gameServer?.stats.droppedMessages ?? 0,
 			activeLogs: logCount,
 		});
+		return true;
+	}
+
+	if (url.pathname === "/ready") {
+		if (req.method !== "GET") methodNotAllowed(res, "GET");
+		sendJson(res, ready ? 200 : 503, {
+			ready,
+			version: config.version,
+		});
+		return true;
+	}
+
+	if (url.pathname === "/metrics") {
+		if (req.method !== "GET") methodNotAllowed(res, "GET");
+		let players = 0;
+		for (const room of rooms.rooms.values()) players += room.players.size;
+		metrics.setResources(
+			rooms.rooms.size,
+			players,
+			gameServer?.clients.size ?? 0,
+		);
+		metrics.setTicks(
+			[...matches.values()].map((match) => ({
+				room: match.room.id,
+				p99DurationMs: match.getStats().p99DurationMs,
+			})),
+		);
+		res.writeHead(200, {
+			"Content-Type": metrics.contentType,
+			"Cache-Control": "no-store",
+		});
+		res.end(await metrics.text());
 		return true;
 	}
 

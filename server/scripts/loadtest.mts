@@ -40,6 +40,8 @@ function option(name: string, fallback: string): string {
 const sleep = (ms: number): Promise<void> =>
 	new Promise<void>((resolveSleep) => setTimeout(resolveSleep, ms));
 
+const origin = option("origin", "http://localhost");
+
 function joinMessage(index: number): string {
 	return JSON.stringify({
 		v: 1,
@@ -55,7 +57,7 @@ async function connectClient(
 	index: number,
 	step: number,
 ): Promise<LoadClient> {
-	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin });
 	await new Promise<void>((resolveOpen, rejectOpen) => {
 		const timer = setTimeout(
 			() => rejectOpen(new Error(`client ${index} did not open at ${step}`)),

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520">
+  <rect width="960" height="520" fill="#0f172a"/>
+  <text x="32" y="46" fill="#e2e8f0" font-family="sans-serif" font-size="26">Dogfight — production architecture</text>
+
+  <rect x="48" y="92" width="230" height="118" rx="14" fill="#1e293b" stroke="#38bdf8"/>
+  <text x="66" y="124" fill="#e2e8f0" font-family="sans-serif" font-size="18">Browser PWA</text>
+  <text x="66" y="151" fill="#94a3b8" font-family="sans-serif" font-size="14">canvas + fixed-step loop</text>
+  <text x="66" y="172" fill="#94a3b8" font-family="sans-serif" font-size="14">prediction / interpolation</text>
+  <text x="66" y="193" fill="#94a3b8" font-family="sans-serif" font-size="14">manifest + service worker</text>
+
+  <rect x="365" y="92" width="230" height="118" rx="14" fill="#1e293b" stroke="#a78bfa"/>
+  <text x="383" y="124" fill="#e2e8f0" font-family="sans-serif" font-size="18">Fly.io edge</text>
+  <text x="383" y="151" fill="#94a3b8" font-family="sans-serif" font-size="14">TLS termination</text>
+  <text x="383" y="172" fill="#94a3b8" font-family="sans-serif" font-size="14">WSS + Upgrade proxy</text>
+  <text x="383" y="193" fill="#94a3b8" font-family="sans-serif" font-size="14">/ready health check</text>
+
+  <rect x="682" y="92" width="230" height="118" rx="14" fill="#1e293b" stroke="#34d399"/>
+  <text x="700" y="124" fill="#e2e8f0" font-family="sans-serif" font-size="18">Node 26 instance</text>
+  <text x="700" y="151" fill="#94a3b8" font-family="sans-serif" font-size="14">HTTP API + static client</text>
+  <text x="700" y="172" fill="#94a3b8" font-family="sans-serif" font-size="14">authoritative 30 Hz rooms</text>
+  <text x="700" y="193" fill="#94a3b8" font-family="sans-serif" font-size="14">state lives in one process</text>
+
+  <path d="M278 150 H365" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M595 150 H682" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="48" y="268" width="864" height="190" rx="14" fill="#111827" stroke="#334155"/>
+  <text x="70" y="302" fill="#e2e8f0" font-family="sans-serif" font-size="18">Shared protocol and observability</text>
+
+  <rect x="70" y="324" width="250" height="104" rx="10" fill="#1e293b"/>
+  <text x="88" y="352" fill="#38bdf8" font-family="sans-serif" font-size="16">shared/</text>
+  <text x="88" y="378" fill="#94a3b8" font-family="sans-serif" font-size="13">Zod JSON schema</text>
+  <text x="88" y="399" fill="#94a3b8" font-family="sans-serif" font-size="13">binary DataView codec</text>
+
+  <rect x="350" y="324" width="250" height="104" rx="10" fill="#1e293b"/>
+  <text x="368" y="352" fill="#a78bfa" font-family="sans-serif" font-size="16">pino + prom-client</text>
+  <text x="368" y="378" fill="#94a3b8" font-family="sans-serif" font-size="13">JSON logs on stdout</text>
+  <text x="368" y="399" fill="#94a3b8" font-family="sans-serif" font-size="13">/metrics gauges and counters</text>
+
+  <rect x="630" y="324" width="250" height="104" rx="10" fill="#1e293b"/>
+  <text x="648" y="352" fill="#34d399" font-family="sans-serif" font-size="16">GHCR + Fly deploy</text>
+  <text x="648" y="378" fill="#94a3b8" font-family="sans-serif" font-size="13">v* tag gates CI</text>
+  <text x="648" y="399" fill="#94a3b8" font-family="sans-serif" font-size="13">image ships version stamp</text>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+    </marker>
+  </defs>
+</svg>

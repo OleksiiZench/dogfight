@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+.git
+.github
+.logs
+**/*.log
+.env
+.env.*
+dist
+**/dist
+coverage
+playwright-report
+test-results
+docs/assets/*.mp4
+docs/assets/*.webm

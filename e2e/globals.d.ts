@@ -4,6 +4,10 @@ interface DebugPoint {
 }
 
 interface DebugGame {
+	readonly connection: {
+		readonly socket: { close(code?: number, reason?: string): void } | null;
+		dispatchEvent(event: Event): boolean;
+	};
 	readonly predictor: {
 		readonly visualPos: DebugPoint | null;
 	};

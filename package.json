@@ -25,6 +25,7 @@
 		"profile:browser": "node scripts/profile-frame.mts",
 		"worker:experiment": "node scripts/worker-experiment.mts",
 		"loadtest": "node server/scripts/loadtest.mts",
+		"chaos": "node scripts/chaos-test.mts",
 		"lint": "biome check .",
 		"fix": "biome check --write ."
 	},

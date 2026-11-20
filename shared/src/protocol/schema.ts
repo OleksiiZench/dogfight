@@ -13,6 +13,7 @@ import {
 export const PROTOCOL_VERSION: 1 = 1;
 
 export type CloseCode =
+	| 1001
 	| 1013
 	| 4001
 	| 4002
@@ -20,8 +21,7 @@ export type CloseCode =
 	| 4004
 	| 4005
 	| 4006
-	| 4007
-	| 4008;
+	| 4007;
 
 export const CLOSE: {
 	readonly INVALID_MESSAGE: 4001;
@@ -31,7 +31,7 @@ export const CLOSE: {
 	readonly NOT_JOINED: 4005;
 	readonly UNKNOWN_ROOM: 4006;
 	readonly POLICY: 4007;
-	readonly SHUTDOWN: 4008;
+	readonly SHUTDOWN: 1001;
 	readonly SLOW_CLIENT: 1013;
 } = {
 	INVALID_MESSAGE: 4001,
@@ -41,7 +41,7 @@ export const CLOSE: {
 	NOT_JOINED: 4005,
 	UNKNOWN_ROOM: 4006,
 	POLICY: 4007,
-	SHUTDOWN: 4008,
+	SHUTDOWN: 1001,
 	SLOW_CLIENT: 1013,
 };
 
@@ -327,6 +327,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
 		text: z.string(),
 	}),
 	z.object({ type: z.literal("left") }),
+	z.object({ type: z.literal("shutdown"), reason: z.string() }),
 	SnapshotMessageSchema,
 ]);
 

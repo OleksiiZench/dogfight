@@ -33,6 +33,7 @@ import {
 } from "./render/draw.ts";
 import type { Sprites } from "./render/sprites.ts";
 import { createSprites } from "./render/sprites.ts";
+import type { ChatPanel } from "./ui/chatView.ts";
 import { createChatPanel } from "./ui/chatView.ts";
 import { errorMessage } from "./ui/dom.ts";
 import type { LoadingFailure, LoadingScreen } from "./ui/loading.ts";
@@ -57,6 +58,23 @@ attachAudio(bus, audio);
 let bootController: AbortController | null = null;
 let loading: LoadingScreen | null = null;
 let lobbyView: LobbyView | null = null;
+let gameChat: ChatPanel | null = null;
+let roomsUrlValue = "/api/rooms";
+let lobbyAssets: GameAssets = { arena: null, sprites: null };
+let activeGame: (() => void) | null = null;
+
+connection.addEventListener("shutdown", (event) => {
+	const { reason } = detailOf<{ reason: string }>(event);
+	const message = `[система] сервер перезавантажується: ${reason}`;
+	gameChat?.append(message);
+	if (activeGame) {
+		activeGame();
+		activeGame = null;
+		connection.clearJoin();
+		showLobby(roomsUrlValue, lobbyAssets);
+	}
+	lobbyView?.notice(message);
+});
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
@@ -183,10 +201,12 @@ async function boot() {
 
 		loading.dispose();
 		loading = null;
-		showLobby(manifest.rooms ?? "/api/rooms", {
+		roomsUrlValue = manifest.rooms ?? "/api/rooms";
+		lobbyAssets = {
 			arena: parseArena(assets.arena),
 			sprites: createSprites(assets.sprites.sheet),
-		});
+		};
+		showLobby(roomsUrlValue, lobbyAssets);
 	} catch (error) {
 		console.error("[loading]", error);
 		loading?.setState({
@@ -228,13 +248,14 @@ function startGame(
 	assets: GameAssets,
 	localId: PlayerId = "p1",
 ) {
-	const gameChat = createChatPanel({
+	const chat = createChatPanel({
 		mount: document.body,
 		connection,
 		title: "Чат бою",
 		variant: "game-chat",
 	});
-	gameChat.append(`[система] кімната ${room.id}, пілот ${pilotName}`);
+	gameChat = chat;
+	chat.append(`[система] кімната ${room.id}, пілот ${pilotName}`);
 
 	const matchView = new MatchView({
 		arena: room.arena ?? assets.arena,
@@ -258,9 +279,7 @@ function startGame(
 			matchView.interpolationDelayMs +
 			(event.code === "BracketRight" ? 16 : -16);
 		matchView.setInterpolationDelay(next);
-		gameChat.append(
-			`[мережа] інтерполяція ${matchView.interpolationDelayMs} мс`,
-		);
+		chat.append(`[мережа] інтерполяція ${matchView.interpolationDelayMs} мс`);
 	};
 	canvas.addEventListener("pointerdown", onPointerDown);
 	window.addEventListener("keydown", onKeyDown);
@@ -276,7 +295,7 @@ function startGame(
 		const { latencyMs, jitterMs, dropRate } = detailOf<{ net: NetSettings }>(
 			event,
 		).net;
-		gameChat.append(
+		chat.append(
 			`[мережа] затримка ${latencyMs} мс · джиттер ${jitterMs} мс · втрати ${(dropRate * 100).toFixed(1)}%`,
 		);
 	};
@@ -350,6 +369,16 @@ function startGame(
 		};
 	}
 	loop.start();
+	activeGame = () => {
+		loop.stop();
+		connection.removeEventListener("snapshot", onSnapshot);
+		connection.removeEventListener("netState", onNetState);
+		canvas.removeEventListener("pointerdown", onPointerDown);
+		window.removeEventListener("keydown", onKeyDown);
+		chat.destroy();
+		gameChat = null;
+		delete window.__dogfight;
+	};
 }
 
 void boot();

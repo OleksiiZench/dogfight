@@ -35,10 +35,31 @@ function text(name: string, fallback: string) {
 		.default(fallback);
 }
 
+const origins = z.preprocess(
+	(raw) => {
+		if (raw === undefined || raw === "" || raw === "*") return ["*"];
+		if (Array.isArray(raw)) return raw;
+		return String(raw)
+			.split(",")
+			.map((value) => value.trim())
+			.filter(Boolean);
+	},
+	z.array(z.string().min(1)).min(1),
+);
+
 const EnvSchema = z
 	.object({
-		HOST: text("HOST", "127.0.0.1"),
+		NODE_ENV: z
+			.enum(["development", "production", "test"])
+			.default("development"),
+		LOG_LEVEL: z
+			.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
+			.default("info"),
+		VERSION: text("VERSION", "dev"),
+		HOST: text("HOST", "0.0.0.0"),
 		PORT: numeric("PORT", 3001, 1, 65535),
+		ALLOWED_ORIGINS: origins,
+		MAX_CONNECTIONS_PER_IP: numeric("MAX_CONNECTIONS_PER_IP", 256, 1, 100000),
 		LOG_DIR: text("LOG_DIR", ".logs"),
 		MAX_ROOMS: numeric("MAX_ROOMS", 50, 1, 10000),
 		MAX_PLAYERS_PER_ROOM: numeric("MAX_PLAYERS_PER_ROOM", 8, 1, 100),
@@ -64,8 +85,13 @@ const EnvSchema = z
 		BLOCK_MS: numeric("BLOCK_MS", 300, 0, 5000),
 	})
 	.transform((env) => ({
+		nodeEnv: env.NODE_ENV,
+		logLevel: env.LOG_LEVEL,
+		version: env.VERSION,
 		host: env.HOST,
 		port: env.PORT,
+		allowedOrigins: env.ALLOWED_ORIGINS,
+		maxConnectionsPerIp: env.MAX_CONNECTIONS_PER_IP,
 		logDir: resolve(rootDir, env.LOG_DIR),
 		clientDist: resolve(rootDir, "client/dist"),
 		roomsFile: resolve(rootDir, "server/data/rooms.json"),

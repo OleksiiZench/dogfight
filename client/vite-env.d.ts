@@ -5,6 +5,8 @@ import type { MatchView } from "./src/net/match.ts";
 import type { Predictor } from "./src/net/predictor.ts";
 
 declare global {
+	const __APP_VERSION__: string;
+
 	interface Window {
 		__dogfight?: {
 			connection: Connection;

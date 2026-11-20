@@ -23,6 +23,7 @@ export interface LobbyViewOptions {
 }
 
 export interface LobbyView {
+	notice(message: string): void;
 	destroy(): void;
 }
 
@@ -41,6 +42,7 @@ export function createLobbyView({ mount, lobby }: LobbyViewOptions): LobbyView {
 				<label>Кімната <select name="room"></select></label>
 				<p class="room-info"></p>
 				<p class="status muted">Завантаження кімнат…</p>
+				<p class="lobby-notice" aria-live="polite"></p>
 				<button type="submit">Приєднатися</button>
 			</form>
 			<div class="lobby-actions">
@@ -59,6 +61,10 @@ export function createLobbyView({ mount, lobby }: LobbyViewOptions): LobbyView {
 	const roomSelect = requireElement<HTMLSelectElement>(root, "[name=room]");
 	const info = requireElement<HTMLParagraphElement>(root, ".room-info");
 	const status = requireElement<HTMLParagraphElement>(root, ".status");
+	const noticeText = requireElement<HTMLParagraphElement>(
+		root,
+		".lobby-notice",
+	);
 	const startButton = requireElement<HTMLButtonElement>(root, ".start");
 	const rosterList = requireElement<HTMLUListElement>(root, ".roster ul");
 	const connection = lobby.connection;
@@ -170,6 +176,11 @@ export function createLobbyView({ mount, lobby }: LobbyViewOptions): LobbyView {
 	startButton.addEventListener("click", onStartClick);
 
 	return {
+		notice(message) {
+			noticeText.textContent = message;
+			status.textContent = message;
+			chat.append(message);
+		},
 		destroy() {
 			lobby.removeEventListener("roomsChanged", renderRooms);
 			lobby.removeEventListener("refreshing", onRefreshing);

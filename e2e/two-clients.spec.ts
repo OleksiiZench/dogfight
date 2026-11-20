@@ -5,7 +5,24 @@ interface Point {
 	y: number;
 }
 
+async function ensureTrainingRoom(page: Page): Promise<void> {
+	const response = await page.request.get("/api/rooms");
+	const rooms = (await response.json()) as Array<{ id?: unknown }>;
+	if (rooms.some((room) => room.id === "training")) return;
+	await page.request.post("/api/rooms", {
+		data: {
+			id: "training",
+			name: "Тренувальний полігон",
+			seed: 1,
+			arena: { width: 1600, height: 900 },
+			asteroidTarget: 4,
+			capacity: 8,
+		},
+	});
+}
+
 async function joinRoom(page: Page, name: string): Promise<void> {
+	await ensureTrainingRoom(page);
 	await page.goto("/?debug");
 	await expect(page.locator(".join-form [name=name]")).toBeVisible();
 	await expect(
@@ -112,5 +129,39 @@ test("two clients share a room, chat and observe movement", async ({
 	} finally {
 		await firstContext.close();
 		await secondContext.close();
+	}
+});
+
+test("shutdown returns the client to the lobby with a notice", async ({
+	browser,
+	baseURL,
+}) => {
+	const context = await browser.newContext({ baseURL });
+	const page = await context.newPage();
+	const errors: string[] = [];
+	page.on("pageerror", (error) => errors.push(error.message));
+	try {
+		await joinRoom(page, "Reconnect");
+		await startMatch(page);
+		await page.evaluate(() => {
+			const connection = window.__dogfight?.connection;
+			if (!connection) throw new Error("debug connection is unavailable");
+			connection.dispatchEvent(
+				new CustomEvent("shutdown", { detail: { reason: "maintenance" } }),
+			);
+			connection.socket?.close(3001, "server shutdown");
+		});
+		await expect(page.locator(".join-form")).toBeVisible();
+		await expect(page.locator(".lobby-notice")).toContainText(
+			/сервер перезавантажується/,
+		);
+		await expect(page.locator(".lobby-notice")).toContainText(/maintenance/);
+		await expect(page.locator(".game-chat")).toHaveCount(0);
+		await expect
+			.poll(async () => page.evaluate(() => window.__dogfight === undefined))
+			.toBe(true);
+		expect(errors).toEqual([]);
+	} finally {
+		await context.close();
 	}
 });

@@ -1,8 +1,13 @@
 # Dogfight — FPV-дрони
 
-Браузерна гра: дрони літають по арені, стріляють, ухиляються від астероїдів і
-збирають пікапи. Репозиторій — навчальний проєкт курсу JavaScript, кожна лаба
-додає один крок.
+Багатокористувацька браузерна аркада: дрони літають по арені, стріляють,
+ухиляються від астероїдів і збирають пікапи. Server-authoritative WebSocket
+рушій, бінарний протокол, prediction/reconciliation, PWA і Prometheus-метрики.
+
+**Грати:** публічний URL з'явиться після деплою Fly.io (`fly.toml` і
+`.github/workflows/deploy.yml` готові). Локально — `npm install && npm run dev`.
+
+![Два гравці в одній кімнаті з netgraph](docs/assets/lab-05-two-player.gif)
 
 - Лаба 1 (цикл із фіксованим кроком): тег `lab-01`, див. [docs/lab-01.md](docs/lab-01.md)
 - Лаба 2 (об'єкти, прототипи, `this`, композиція): тег `lab-02`, цей README
@@ -10,11 +15,11 @@
 - Лаба 4 (Node.js, `EventEmitter`, streams, WebSocket): цей README, розділ «Лаба 4» нижче
 - Лаба 5 (authoritative server, prediction, interpolation, binary protocol): цей README, розділ «Лаба 5» нижче
 - Лаба 6 (strict TypeScript, typed protocol, runtime validation): тег `lab-06`, цей README, розділ «Лаба 6» нижче
-- Лаба 7 (тестування, профілювання й оптимізація): цей README, розділ «Лаба 7» нижче
+- Лаба 7 (тестування, профілювання й оптимізація): тег `lab-07`, цей README, розділ «Лаба 7» нижче
+- Лаба 8 (production, Docker/CD, observability, PWA): цей README, розділ «Лаба 8» нижче
 
 [![CI](https://github.com/OleksiiZench/dogfight/actions/workflows/ci.yml/badge.svg)](https://github.com/OleksiiZench/dogfight/actions/workflows/ci.yml)
-
-![Два вікна браузера з двома гравцями при 100 мс ± 30 мс і 2% втрат](docs/assets/lab-05-two-player.gif)
+[![Deploy](https://github.com/OleksiiZench/dogfight/actions/workflows/deploy.yml/badge.svg)](https://github.com/OleksiiZench/dogfight/actions/workflows/deploy.yml)
 
 ## Запуск
 
@@ -32,6 +37,8 @@
     npm run profile:browser    # headless-профілювання кадрів
     npm run worker:experiment  # clone vs transfer у Worker
     npm run loadtest           # навантаження сервера
+    npm run chaos              # kill-тести, flood і reconnect
+    docker compose up --build  # production-like контейнер на :3000
 
 Керування: ←/→ або A/D — поворот, ↑ або W — тяга, Space або клік мишею — вогонь.
 Супротивник — бот (червоний дрон). Рахунок: +100 за збитий дрон, +10 за астероїд.
@@ -972,3 +979,129 @@ downstream ~152 MiB/s. Пам'ять не головний обмежник (RSS
 6. Навантаження показало межу 64 WS-клієнти + 16 ботів. Це CPU/serialization,
    а не GC чи bandwidth: ELU лише .51 на межі, а p99 росте разом з кількістю
    snapshot-ів на клієнта.
+
+## Лаба 8 — Ship It
+
+Умови: [`lab-08-ship-it.md`](../Programming-Practice-Projects/courses/javascript/lab-08-ship-it.md),
+нотатки: [`lab-08-ship-it.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-08-ship-it.notes.md).
+
+Архітектура продакшн-контуру:
+[![architecture](docs/assets/lab-08-architecture.svg)](docs/assets/lab-08-architecture.svg).
+
+### M1 — production process
+
+`server/src/config.ts` валідуються через Zod: `NODE_ENV`, `LOG_LEVEL`,
+`VERSION`, `HOST=0.0.0.0`, `PORT`, `ALLOWED_ORIGINS`,
+`MAX_CONNECTIONS_PER_IP`, `MAX_ROOMS`, `MAX_PLAYERS_PER_ROOM`, payload/rate/join
+і heartbeat-ліміти. `/health` віддає `ok`, `ready`, `version`, uptime, RSS,
+rooms, WS-клієнтів і dropped messages; `/ready` — 200/503; `/metrics` —
+Prometheus-текст із `dogfight_build_info`, rooms/players/ws_clients,
+messages/bytes, tick p99 per room, event-loop utilization, RSS і rejections за
+причиною.
+
+`SIGTERM` перемикає `ready=false`, дає 50 мс на in-flight health-запити, шле
+клієнтам `{ type: "shutdown", reason }`, закриває WS з кодом `1001`, закриває
+HTTP-сервер, логи й матчі, потім виходить 0. `uncaughtException` і
+`unhandledRejection` логуються структурованим pino-рядком і завершують процес
+з кодом 1 — supervisor має перезапустити чистий стан. Pino пише події
+`server.listening`, `ws.connected`, `player.joined`, `player.left`,
+`shutdown.start`, `shutdown.complete`, `ws.rejected` з полями `roomId`,
+`playerId`, `reason` тощо. Версія з `VERSION`/`GIT_SHA`/`git rev-parse` потрапляє
+і в HUD (`__APP_VERSION__`), і в `/health`.
+
+### M2 — hardening and chaos
+
+`verifyClient` відхиляє WS без дозволеного `Origin` (`403`) і тримає ліміт
+з'єднань на IP (`429`); у dev `ALLOWED_ORIGINS=*` лишається зручним для локального
+запуску. Ліміти Lab 4 — payload cap, token bucket, join timeout, heartbeat,
+slow-client buffer — тепер збільшують `dogfight_rejections_total{reason=...}`.
+Loadtest отримав `--origin`, щоб його можна було цілити в staging без вимкнення
+origin check.
+
+`npm run chaos` (`scripts/chaos-test.mts`) робить три сцени в процесі й пише
+[json](docs/assets/lab-08-chaos.json),
+[svg](docs/assets/lab-08-chaos.svg),
+[markdown](docs/assets/lab-08-chaos.md):
+
+| Сценарій                | Результат                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------------------------- |
+| Kill клієнта mid-match  | кімната `chaos-a` 2 → 1 гравець; p99 контрольної кімнати 1.81 → 1.81 мс                           |
+| 1000 сміттєвих кадрів/с | close `4001`, 90 payload rejections + 910 rate_limit, p99 контрольної 1.81 → 1.81 мс              |
+| Kill сервера mid-match  | `shutdown reason="server shutdown"`, close `1001`, reconnect через 500 мс, `hello` після рестарту |
+
+Клієнт на `shutdown` закриває матч, повертається в лобі, показує окремий
+`.lobby-notice` і продовжує reconnect із backoff; це покрито e2e-тестом
+`shutdown returns the client to the lobby with a notice`. Загалом: **23 файли,
+153 тести**, e2e — 2 тести, coverage — 93.75% statements / 85.86% branches /
+93.64% functions / 94.30% lines.
+
+### M3 — контейнер і пайплайн
+
+`Dockerfile` — multi-stage: `deps` встановлює workspace з `npm ci`, `build`
+збирає Vite-клієнт, `runtime` робить `npm ci --omit=dev`, копіює тільки
+`client/dist`, `server/src`, `server/data`, `shared/src`, запускається під
+не-root користувачем і використовує exec-form
+`CMD ["node", "server/src/index.ts"]` — `SIGTERM` доходить до Node без npm-прошарку.
+`HEALTHCHECK` слідує за `/health`. `.dockerignore` виключає `node_modules`,
+`.git`, `.env`, логи, coverage, test-results і зайве відео. Локальний
+production-like запуск: `docker compose up --build`.
+
+`.github/workflows/ci.yml` gate-ить кожен push/PR. `.github/workflows/deploy.yml`
+на tag `v*` повторює весь quality gate, збирає image локально в Runner,
+перевіряє його розмір (<200 MB; інакше job падає), пушить у GHCR і деплоїть через
+`flyctl deploy --remote-only --image ... --env VERSION=$TAG`. Розмір image і
+тег з'являються в Job Summary. Fly.io обрано тому, що WebSocket-и підтримуються
+edge-проксі, TLS/WSS завершується на платформі, а 15-секундні серверні
+heartbeats переживають idle timeout. `fly.toml` тримає один інстанс у `waw`,
+`/ready` health check, `kill_signal = "SIGTERM"` і `kill_timeout = "10s"`.
+
+> ⚠️ locally docker/flyctl/gh недоступні, тому live-результат перевірки розміру,
+> WSS URL і `/health` з версією тага мають бути підтверджені після пушу й
+> додавання repository secret `FLY_API_TOKEN`.
+
+### M4 — launch checklist
+
+- **PWA:** `vite-plugin-pwa` генерує `manifest.webmanifest`, `sw.js`,
+  `registerSW.js` і precache; іконки 192/512 лежать у `client/public/icons`.
+  Server віддає `.webmanifest` з коректним MIME.
+- **Uptime monitor:** після деплою додати externals checker на
+  `GET https://<app>.fly.dev/health` раз на хвилину.
+- **Phone install:** Open in browser → Add to Home screen → запустити без адресного
+  рядка. Цей крок вимагає реального телефона й публічного URL.
+- **Two strangers / real RTT:** локально перевірено двома браузерами; строгий
+  DoD вимагає двох людей з різних мереж. Після деплою записати їх анонімізовані
+  netgraph/RTT-числа й додати video/GIF у цей розділ.
+- **Demo video:** 3–5 хв (геймплей двома вікнами → архітектура → deep dive з
+  prediction/GC) має бути записаний після реальної сесії; локальний
+  [GIF](docs/assets/lab-05-two-player.gif) лишається попередньою демонстрацією.
+
+### Consolidated measurements
+
+| Шар              | Метрика                       | Результат                                  | Артефакт                                                                                                                                      |
+| ---------------- | ----------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Protocol (Lab 5) | snapshot bytes JSON → binary  | 4267 → 692 (−83.8%)                        | [README §Lab 5](#m4--бінарний-dataview-протокол)                                                                                              |
+| Browser (Lab 7)  | mean work / work p99          | 1.25 → 1.04 мс / 3.20 → 2.70 мс            | [profile before](docs/assets/lab-07-profile-before/lab-07-flame-before.svg), [after](docs/assets/lab-07-profile-after/lab-07-flame-after.svg) |
+| Browser (Lab 7)  | frame p99 / hitch >50 мс      | 16.8 мс / 0                                | [summary](docs/assets/lab-07-profile-after/lab-07-summary-after.json)                                                                         |
+| Server (Lab 7)   | capacity                      | 64 WS + 16 ботів, tick p99 33.68 мс        | [load chart](docs/assets/lab-07-load.svg)                                                                                                     |
+| Worker (Lab 7)   | decision                      | no-go, transfer повільніший за main thread | [worker](docs/assets/lab-07-worker.svg)                                                                                                       |
+| Chaos (Lab 8)    | control-room p99 during flood | 1.81 → 1.81 мс                             | [chaos](docs/assets/lab-08-chaos.svg)                                                                                                         |
+
+### Known limitations and what is next
+
+- **One instance.** Кімната живе у пам'яті процесу; round-robin між двома
+  інстансами розділить гравців. Наступний крок — sticky routing за room id,
+  потім Redis pub/sub для спільного стану.
+- **No lag compensation.** Сервер стріляє по поточному стану, а не по тому, що
+  бачив стрілець. Наступний крок — ring buffer станів і реконструкція пострілу.
+- **No matchmaking/accounts.** Кімнати створюються з лобі або API; позивний не
+  авторизований.
+- **Capacity 64 WS + 16 ботів.** Далі bottleneck — CPU симуляції й serialization;
+  горизонтальне масштабування потребує попереднього пункту про стан.
+- **Deploy artifacts are prepared, not live.** Після пушу `v1.0.0` треба
+  підтвердити image size, Fly health, WSS і real-RTT сесію.
+
+### Tag history
+
+`lab-01` … `lab-07` — локальні теги етапів. Фінальні теги Lab 8 — `lab-08` і
+`v1.0.0` — створюються локально після фінального quality gate; `v*` у remote
+запускає deploy workflow.
