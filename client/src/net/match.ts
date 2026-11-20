@@ -1,4 +1,5 @@
 import { lerp, lerpAngle } from "shared/math.ts";
+import { beginProfile, endProfile } from "shared/profile.ts";
 import { entityFromSnapshot } from "shared/protocol.ts";
 import type { AnyEntity } from "shared/sim/entity.ts";
 import type { Ship } from "shared/sim/ship.ts";
@@ -105,6 +106,15 @@ export class MatchView extends EventTarget {
 	}
 
 	applySnapshot(snapshot: Snapshot | null | undefined): boolean {
+		const token = beginProfile("applySnapshot");
+		try {
+			return this.applySnapshotInner(snapshot);
+		} finally {
+			endProfile(token, "applySnapshot");
+		}
+	}
+
+	applySnapshotInner(snapshot: Snapshot | null | undefined): boolean {
 		if (!snapshot || snapshot.tick <= this.tick) return false;
 		this.tick = snapshot.tick;
 		this.arena = snapshot.arena ?? this.arena;
@@ -142,6 +152,15 @@ export class MatchView extends EventTarget {
 	}
 
 	interpolatedEntities(now = performance.now()): AnyEntity[] {
+		const token = beginProfile("interpolate");
+		try {
+			return this.interpolatedEntitiesInner(now);
+		} finally {
+			endProfile(token, "interpolate");
+		}
+	}
+
+	interpolatedEntitiesInner(now = performance.now()): AnyEntity[] {
 		const pair = framePair(this.history, now - this.interpolationDelayMs);
 		if (!pair) return [];
 		const [earlier, later, alpha] = pair;
@@ -163,8 +182,9 @@ export class MatchView extends EventTarget {
 		alpha: number,
 		sprites: Sprites | null,
 	): void {
+		const entities = this.interpolatedEntities();
 		for (const kind of DRAW_ORDER) {
-			for (const entity of this.interpolatedEntities()) {
+			for (const entity of entities) {
 				if (entity.id === this.excludeId) continue;
 				if (entity.kind === "bullet" && entity.ownerId === this.excludeOwnerId)
 					continue;

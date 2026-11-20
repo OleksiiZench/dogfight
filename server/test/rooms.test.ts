@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import type { RoomEvent } from "../src/rooms.ts";
 import { RoomManager } from "../src/rooms.ts";
 

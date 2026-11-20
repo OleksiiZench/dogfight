@@ -3,9 +3,9 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import type { ServerMessage } from "shared/protocol.ts";
 import { parseServerMessage } from "shared/protocol.ts";
+import { onTestFinished, test } from "vitest";
 import type { RawData } from "ws";
 import WebSocket from "ws";
 import { loadConfig } from "../src/config.ts";
@@ -105,7 +105,7 @@ async function until<T>(
 	throw new Error("condition was not met in time");
 }
 
-test("http, rooms, chat and replay work together", async (t) => {
+test("http, rooms, chat and replay work together", async () => {
 	const logDir = await mkdtemp(join(tmpdir(), "dogfight-int-"));
 	const config = {
 		...loadConfig({}),
@@ -117,7 +117,7 @@ test("http, rooms, chat and replay work together", async (t) => {
 		messagesPerSecond: 20,
 	};
 	const app = await createApp(config);
-	t.after(async () => {
+	onTestFinished(async () => {
 		await app.close();
 		await rm(logDir, { recursive: true, force: true });
 	});
@@ -140,6 +140,25 @@ test("http, rooms, chat and replay work together", async (t) => {
 		expectArray(await fetchJson(`${base}/api/rooms`), "rooms").length,
 		3,
 	);
+
+	const botsPost = await fetch(`${base}/api/rooms/training/bots`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ count: 3 }),
+	});
+	assert.equal(botsPost.status, 200);
+	assert.equal(expectRecord(await botsPost.json(), "bots").bots, 3);
+	const botsStats = expectRecord(await fetchJson(`${base}/api/stats`), "stats");
+	const trainingStats = expectArray(botsStats.matches, "matches")
+		.map((entry) => expectRecord(entry, "match"))
+		.find((entry) => entry.id === "training");
+	assert.ok(trainingStats);
+	assert.equal(trainingStats.bots, 3);
+	const botsDelete = await fetch(`${base}/api/rooms/training/bots`, {
+		method: "DELETE",
+	});
+	assert.equal(botsDelete.status, 200);
+	assert.equal(expectRecord(await botsDelete.json(), "bots").bots, 0);
 
 	const alpha = await connect(port);
 	const beta = await connect(port);

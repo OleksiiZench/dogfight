@@ -2,12 +2,30 @@ import type { Point } from "../types.ts";
 
 // Immutable-style 2D vector: every method returns a NEW Vector2.
 export class Vector2 implements Point {
-	readonly x: number;
-	readonly y: number;
+	x: number;
+	y: number;
 
 	constructor(x = 0, y = 0) {
 		this.x = x;
 		this.y = y;
+	}
+
+	set(x: number, y: number): this {
+		this.x = x;
+		this.y = y;
+		return this;
+	}
+
+	addInPlace(v: Point): this {
+		this.x += v.x;
+		this.y += v.y;
+		return this;
+	}
+
+	scaleInPlace(k: number): this {
+		this.x *= k;
+		this.y *= k;
+		return this;
 	}
 
 	static fromAngle(angle: number, length = 1): Vector2 {

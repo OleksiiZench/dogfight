@@ -10,6 +10,9 @@
 - Лаба 4 (Node.js, `EventEmitter`, streams, WebSocket): цей README, розділ «Лаба 4» нижче
 - Лаба 5 (authoritative server, prediction, interpolation, binary protocol): цей README, розділ «Лаба 5» нижче
 - Лаба 6 (strict TypeScript, typed protocol, runtime validation): тег `lab-06`, цей README, розділ «Лаба 6» нижче
+- Лаба 7 (тестування, профілювання й оптимізація): цей README, розділ «Лаба 7» нижче
+
+[![CI](https://github.com/OleksiiZench/dogfight/actions/workflows/ci.yml/badge.svg)](https://github.com/OleksiiZench/dogfight/actions/workflows/ci.yml)
 
 ![Два вікна браузера з двома гравцями при 100 мс ± 30 мс і 2% втрат](docs/assets/lab-05-two-player.gif)
 
@@ -19,11 +22,16 @@
     npm run dev      # Vite :5173 + Node-сервер :3001
     npm run build    # client/dist
     npm run start    # сервер віддає зібраний клієнт
-    npm run test     # node:test
+    npm run test     # Vitest: client + server + shared
+    npm run coverage # Vitest coverage, поріг 85%
+    npm run test:e2e # Playwright: два клієнти в одній кімнаті
     npm run lint     # Biome
     npm run typecheck # root + client + server + shared (tsc --noEmit)
     npm run benchmark:netcode  # JSON vs binary, 30 Гц, 4 гравці
     npm run record:netcode     # 20-секундний GIF двох вікон (потрібен ffmpeg)
+    npm run profile:browser    # headless-профілювання кадрів
+    npm run worker:experiment  # clone vs transfer у Worker
+    npm run loadtest           # навантаження сервера
 
 Керування: ←/→ або A/D — поворот, ↑ або W — тяга, Space або клік мишею — вогонь.
 Супротивник — бот (червоний дрон). Рахунок: +100 за збитий дрон, +10 за астероїд.
@@ -47,7 +55,8 @@
     client/src/net/               connection, lobby, matchView, predictor
     client/src/render/, ui/       canvas із devicePixelRatio, HUD, лобі, чат
     client/src/audio/, assets/    звук і завантаження асетів з AbortSignal
-    scripts/                      dev, benchmark-codec, record-netcode
+    scripts/                      dev, benchmark-codec, record-netcode, profile-frame, worker-experiment
+    server/scripts/loadtest.mts   headless WebSocket-клієнти й графік ємності
 
 Спадкування — рівно один рівень: усі типи успадковують `Entity`, глибше нікуди.
 
@@ -66,10 +75,13 @@
 з'являються в наступному. Без знімка `Map` віддавав би нові елементи прямо в
 поточну ітерацію, і куля рухалась би зайвий крок.
 
-**Інтерполяція.** Перед кожним кроком кожна сутність зберігає `prevPos` і
-`prevAngle`. Оскільки методи `Vector2` не мутують, для цього досить скопіювати
-посилання, без клонування. Рендер змішує попередній і поточний стани за `alpha`
-з циклу. Якщо сутність «телепортувалась» через край арени, змішування пропускається.
+**Інтерполяція.** Перед кожним кроком кожна сутність копіює `pos`/`angle` у
+власні `prevPos`/`prevAngle`. Після профілювання гарячі шляхи перейшли на
+in-place `Vector2` (`set`, `addInPlace`, `scaleInPlace`), тому спільне посилання
+більше не працює: мутація `pos` зіпсувала б `prevPos`. Рендер змішує попередній і
+поточний стани за `alpha` з циклу, перевикористовуючи один `renderCache`, а не
+новий `Vector2` щокадру. Якщо сутність «телепортувалась» через край арени,
+змішування пропускається.
 
 **Наміри замість клавіш.** Керування і бот повертають однакові об'єкти
 `{ turn, thrust, fire }`. Корабель нічого не знає про клавіатуру, тому логіка
@@ -81,8 +93,8 @@
 
 **Колізії.** `findCollisions(entities)` — окрема функція, яка лише повертає пари,
 що перетинаються. Правила (`rules.ts`) вирішують, що з парою робити, за таблицею
-`Map` ключів на кшталт `"bullet:ship"`. Перехід на просторове хешування змінить
-тільки `collision.ts`.
+`Map` ключів на кшталт `"bullet:ship"`. Після профілювання `O(n²)`-перебір
+замінено просторим хешем із коміркою 128 px у `collision.ts`; правила не змінилися.
 
 ## Bug із `this`
 
@@ -779,3 +791,184 @@ DOM тут тонкий: LoadingScreen, LobbyView, HUD, ChatView і NetGraph м�
 `✓ 137 modules transformed`; benchmark повторює Лабу 5 — `4267/692 bytes,
 10 entities` для snapshot і 14 байт на input. У CI виконується той самий
 набір, окрім benchmark.
+
+## Лаба 7 — движок, пам'ять і тести
+
+Умови: [`lab-07-engine-performance-testing.md`](../Programming-Practice-Projects/courses/javascript/lab-07-engine-performance-testing.md),
+нотатки: [`lab-07-engine-performance-testing.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-07-engine-performance-testing.notes.md).
+
+### M1 — тести
+
+`npm test` запускає Vitest у трьох проєктах (root config з `projects` для
+`client`, `server`, `shared`): **22 файли, 147 тестів**. Серед них 7
+властивостей fast-check у `shared/test/properties.test.ts`: round-trip codec у
+межах tolerance, довжина input/snapshot, «довільний сміттєвий буфер ніколи не
+падає», корабель лишається в арені протягом 1000 кроків, парсер приймає
+згенеровані валідні повідомлення й відхиляє мутації. Додано fake-timer тести
+акумулятора (`client/test/loop.test.ts`) і heartbeat/rate-limit
+(`server/test/policy.test.ts`), чисту реконсиляцію
+(`client/src/net/reconcile.ts`) і unit-тести нових гарячих шляхів (`Vector2`,
+pool, spatial hash).
+
+`npm run coverage`: **93.75% statements / 85.86% branches / 93.64% functions /
+94.30% lines**, `shared/src/sim` — 96.86% statements; поріг 85% проходить.
+Рефакторинг для тестів виніс токен-бакет і heartbeat у `server/src/policy.ts`,
+а реконсиляцію — в окрему чисту функцію.
+
+### M2 — e2e й CI
+
+`npm run test:e2e` піднімає збірку через Playwright webServer, відкриває два
+браузерні контексти, приєднує обидва до кімнати `training`, перевіряє roster в
+обох, рух одного корабля в іншого (<500 мс) і чат. Скріншот:
+[два клієнти](docs/assets/lab-07-two-clients.png).
+
+GitHub Actions (`.github/workflows/ci.yml`): `npm ci` → `typecheck` →
+`lint` → `test` → `coverage` → `build` → `npx playwright install --with-deps
+chromium` → `test:e2e`, з upload'ом `coverage`, `playwright-report`,
+`test-results`, `docs/assets`. Badge додано вгорі README. Під час е2е знайдено
+й виправлено production MIME для `.js`/`.mjs` (`text/javascript`) у
+`server/src/http/static.ts`.
+
+### M3 — профіль до і після
+
+Інструментація: `?profile` у клієнта й `PROFILE=1` у сервера вмикають
+`performance.mark/measure` навколо `simulate`, `render`, `decode`, `reconcile`,
+`applySnapshot`, `interpolate` та `server:simulate`. `window.__dogfight.profile`
+і `GET /api/profile` віддають сирі вимірювання. Скрипт
+`scripts/profile-frame.mts` стартує сервер у процесі, додає 8 ботів через
+`/api/rooms/training/bots`, тримає `ArrowUp + Space`, збирає CDP CPU profile,
+Chrome Tracing з GC-подіями, V8 `--trace-gc` лог, frame/work вибірки й
+скріншот. Команда: `npm run profile:browser -- --label=before|after
+--duration=30000 --bots=8`; артефакти лежать у `docs/assets/lab-07-profile-{before,after}/`.
+
+Середовище: Node `v26.12.1`, Chromium headless, 1280×720, 30 с, 8 ботів,
+binary codec, 60 Hz rAF.
+
+| Метрика кадру   | Before | After |
+| --------------- | -----: | ----: |
+| FPS             |     60 |    60 |
+| frame p50, мс   |  16.70 | 16.70 |
+| frame p95, мс   |  16.70 | 16.70 |
+| frame p99, мс   |  16.80 | 16.80 |
+| mean work, мс   |   1.25 |  1.04 |
+| work p99, мс    |   3.20 |  2.70 |
+| кадрів >16.7 мс |    754 |   740 |
+| hitch-ів >50 мс |      0 |     0 |
+
+| GC (30 с)       | Before |  After |
+| --------------- | -----: | -----: |
+| major pauses    |      6 |      6 |
+| major total, мс | 20.109 | 19.550 |
+| minor pauses    |     58 |     27 |
+| minor total, мс | 51.316 | 33.203 |
+| max pause, мс   |  4.615 |  5.239 |
+
+Ціль «p99 <16.7 мс» і «zero major GCs» не досягнута буквально, але hitch
+прибрано: жодного кадру >50 мс ні до, ні після; p99 =16.8 мс — це квантування
+headless rAF (величини 16.6/16.7/16.8 мс), а не GC. Шість major GC за 30 с
+лишилися в обох запусках із майже тим самим часом (20.1 → 19.6 мс): Chromium
+періодично запускає old-generation cycle у headless-сесії незалежно від наших
+allocation hot spots. Натомість паузи молодшої генерації впали з 58 до 27, а
+загальний час у GC — з 71.4 до 52.8 мс.
+
+Top self-time функції до: `(idle)`, `(program)`, `dispatchEvent`; після:
+`(idle)`, `(program)`, `dispatchEvent`, далі `fillText`/`drawImage` (canvas).
+Три основні джерела алокацій, які бачив профіль у коді: тимчасові `Vector2`
+з `add`/`scale`, об'єкти частинок вибуху й проміжні масиви в `O(n²)` колізіях.
+Після оптимізації: in-place `Vector2`, пул частинок `shared/src/sim/pool.ts`,
+просторовий хеш (`128 px`) у `collision.ts`, один `interpolatedEntities()` на
+кадр замість виклику на кожен вид сутності та перевикористаний `renderCache`
+в `Entity.renderPos`.
+
+| Серверний тік (30 с, той самий профіль) | Before | After |
+| --------------------------------------- | -----: | ----: |
+| `server:simulate` p50, мс               |  0.078 | 0.099 |
+| `server:simulate` p95, мс               |  0.857 | 0.807 |
+| `server:simulate` p99, мс               |  1.459 | 1.184 |
+
+Артефакти:
+[flame before](docs/assets/lab-07-profile-before/lab-07-flame-before.svg),
+[flame after](docs/assets/lab-07-profile-after/lab-07-flame-after.svg),
+[скрін before](docs/assets/lab-07-profile-before/lab-07-profile-before.png),
+[скрін after](docs/assets/lab-07-profile-after/lab-07-profile-after.png),
+[CPU before](docs/assets/lab-07-profile-before/lab-07-cpu-before.cpuprofile.json),
+[CPU after](docs/assets/lab-07-profile-after/lab-07-cpu-after.cpuprofile.json),
+[summary before](docs/assets/lab-07-profile-before/lab-07-summary-before.json),
+[summary after](docs/assets/lab-07-profile-after/lab-07-summary-after.json),
+[frames CSV](docs/assets/lab-07-profile-after/lab-07-frames-after.csv),
+[events](docs/assets/lab-07-profile-after/lab-07-events-after.json),
+[GC log](docs/assets/lab-07-profile-after/lab-07-gc-after.log).
+
+### M4 — боти, Worker і навантаження
+
+Боти — `server/src/bots.ts`: той самий інтерфейс `Intent`, що й у людини.
+Шукають найближчу ціль, оминають астероїди, стріляють з індивідуальною
+затримкою. `Match.setBots(n)` додає/видаляє ботів як звичайних гравців
+симуляції; endpoint `GET|POST|DELETE /api/rooms/:id/bots` без auth (для
+навчального стенда), `POST {"count": 8}`.
+
+Worker-експеримент (`npm run worker:experiment`,
+`scripts/worker-experiment.mts`) переносить суму `Float32Array` у
+`worker_threads` і порівнює clone, transfer і роботу в головному потоці:
+
+| Буфер | main, мс | worker clone round-trip, мс | worker transfer round-trip, мс |
+| ----: | -------: | --------------------------: | -----------------------------: |
+|  8 MB |     1.39 |                        4.73 |                           2.22 |
+| 32 MB |    29.04 |                       40.77 |                          32.18 |
+| 64 MB |    60.20 |                       80.94 |                          63.82 |
+
+Clone лишає вихідний `ArrayBuffer` недоторканим, transfer обнуляє
+`byteLength` у відправника. Рішення: **no-go**. Навіть transfer не виграє у
+main-thread computing (2.22 > 1.39, 32.18 > 29.04, 63.82 > 60.20 мс), а наші
+реальні пакети й частинки набагато менші за 8 MB. Додавати Worker у продакшн
+немає сенсу: message latency перевищує зекономлений час. Артефакти:
+[worker.json](docs/assets/lab-07-worker.json),
+[worker.svg](docs/assets/lab-07-worker.svg).
+
+Load test (`npm run loadtest`, `server/scripts/loadtest.mts`) піднімає сервер у
+процесі з окремою кімнатою `load`, додає 16 ботів і піднімає N headless
+WebSocket-клієнтів (8 → 32 → 64 → 128), кожен надсилає 30 input/с за
+синусоїдальною траєкторією з періодичним вогнем. Міряємо `/api/stats`
+(tick p95/p99), `performance.eventLoopUtilization()`, RSS і
+`gameServer.stats.bytes*` кожні 250 мс після 3 с прогрівання.
+
+| Клієнти + 16 ботів | tick mean, мс | tick p95, мс | tick p99, мс | ELU | RSS, MB | downstream, MiB/s | Вердикт |
+| -----------------: | ------------: | -----------: | -----------: | --: | ------: | ----------------: | ------- |
+|                  8 |          4.77 |         6.65 |         8.00 | .31 |     223 |              1.73 | ok      |
+|                 32 |          7.82 |         9.06 |        10.49 | .33 |     261 |             13.77 | ok      |
+|                 64 |         16.16 |        26.61 |        33.68 | .51 |     281 |             47.89 | межа    |
+|                128 |         73.33 |        95.51 |       101.83 | .79 |     275 |            152.43 | over    |
+
+**Capacity = 64WS-клієнти + 16 ботів** — на цьому рівні tick p99 уперше
+перетинає бюджет 33 мс (30 Гц). На 128 клієнтах bottleneck — CPU симуляції й
+serialization snapshot-ів: p99 зростає до 101.8 мс, event-loop utilization .79,
+downstream ~152 MiB/s. Пам'ять не головний обмежник (RSS стабілізувався близько
+275–281 MB). Графік і сирі дані:
+[lab-07-load.svg](docs/assets/lab-07-load.svg),
+[lab-07-load.csv](docs/assets/lab-07-load.csv),
+[lab-07-load.json](docs/assets/lab-07-load.json).
+
+### Reflection
+
+1. V8: parser → bytecode (Ignition) → Maglev/TurboFan. Гарячі функції з
+   стабільними типами оптимізуються; зміна типів/форм викликає deopt. У нас
+   найгарячіші шляхи мають фіксовані форми класів, а `Vector2` тепер мутує
+   ті самі три поля в тому самому порядку.
+2. Hidden class ламається, коли об'єктам одного call site додають поля вже
+   після створення. Тому всі поля сутностей ініціалізуються в конструкторі, а
+   самі behaviors лишаються рядками в масиві однієї форми.
+3. Generational GC: scavenge копіює кілька живих молодших об'єктів, а
+   mark-sweep старої генерації рідший і дорожчий. Довгоживуча частинка
+   переживає кілька scavenges і потрапляє в old gen; короткоживуча вмирає в
+   young gen. Пул частинок зменшив кількість minor pauses 58 → 27.
+4. Worker: clone копіює `ArrayBuffer`, transfer робить zero-copy і від'єднує
+   буфер, `SharedArrayBuffer + Atomics` дає справжню спільну пам'ять, але
+   потребує COOP/COEP. У нашому тесті transfer був найшвидшим шляхом Worker,
+   але повільнішим за локальний compute, тому ми його не лишили.
+5. Property test перевіряє інваріант на тисячах згенерованих вхідних даних;
+   example test — один конкретний випадок. Shrinking fast-check зводить
+   контрприклад до мінімального (наприклад, конкретне невалідне число в
+   codec), що робить баг локальним.
+6. Навантаження показало межу 64 WS-клієнти + 16 ботів. Це CPU/serialization,
+   а не GC чи bandwidth: ELU лише .51 на межі, а p99 росте разом з кількістю
+   snapshot-ів на клієнта.

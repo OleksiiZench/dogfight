@@ -6,7 +6,14 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"ignoreUnknown": false
+		"ignoreUnknown": false,
+		"includes": [
+			"**",
+			"!coverage",
+			"!playwright-report",
+			"!test-results",
+			"!docs/assets"
+		]
 	},
 	"formatter": {
 		"enabled": true,

@@ -16,16 +16,25 @@
 		"build": "npm run build --workspace dogfight-client",
 		"preview": "npm run preview --workspace dogfight-client",
 		"start": "npm run start --workspace dogfight-server",
-		"test": "npm run test --workspaces --if-present",
+		"test": "vitest run --config vitest.config.ts",
+		"test:e2e": "playwright test",
+		"coverage": "vitest run --config vitest.config.ts --coverage",
 		"typecheck": "tsc -p tsconfig.json && npm run typecheck --workspaces --if-present",
 		"benchmark:netcode": "node scripts/benchmark-codec.mts",
 		"record:netcode": "node scripts/record-netcode.mts",
+		"profile:browser": "node scripts/profile-frame.mts",
+		"worker:experiment": "node scripts/worker-experiment.mts",
+		"loadtest": "node server/scripts/loadtest.mts",
 		"lint": "biome check .",
 		"fix": "biome check --write ."
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.6.8",
+		"@playwright/test": "^1.65.1",
 		"@types/node": "^26.6.6",
-		"typescript": "^5.9.3"
+		"@vitest/coverage-v8": "^5.1.1",
+		"fast-check": "^4.10.3",
+		"typescript": "^5.9.3",
+		"vitest": "^5.1.1"
 	}
 }

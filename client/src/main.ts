@@ -1,3 +1,9 @@
+import {
+	clearProfileMeasures,
+	measureProfile,
+	profileMeasures,
+	setProfileEnabled,
+} from "shared/profile.ts";
 import type { NetSettings } from "shared/protocol.ts";
 import type { Arena, PlayerId, Snapshot } from "shared/types.ts";
 import "./style.css";
@@ -36,6 +42,7 @@ import { createLobbyView } from "./ui/lobbyView.ts";
 
 const MANIFEST_URL = "/assets/manifest.json";
 const params = new URLSearchParams(window.location.search);
+setProfileEnabled(params.has("profile"));
 const gameCanvas = document.getElementById("game");
 if (!(gameCanvas instanceof HTMLCanvasElement))
 	throw new Error("missing #game canvas");
@@ -277,51 +284,55 @@ function startGame(
 	connection.addEventListener("netState", onNetState);
 
 	function simulate(dt: number) {
-		predictor.stepSeconds = dt;
-		const intent = keyboardIntent(input);
-		if (pointerFire) intent.fire = true;
-		const record = predictor.applyIntent(intent);
-		connection.sendInput(intent, record);
-		input.endStep();
+		measureProfile("simulate", () => {
+			predictor.stepSeconds = dt;
+			const intent = keyboardIntent(input);
+			if (pointerFire) intent.fire = true;
+			const record = predictor.applyIntent(intent);
+			connection.sendInput(intent, record);
+			input.endStep();
+		});
 	}
 
 	function render(alpha: number) {
-		predictor.updateVisual();
-		const age = connection.stats.lastSnapshotAt
-			? performance.now() - connection.stats.lastSnapshotAt
-			: 0;
-		const stats = {
-			...connection.stats,
-			snapshotAgeMs: age,
-			interpolationDelayMs: matchView.interpolationDelayMs,
-			tick: matchView.tick,
-		};
-		ctx.clearRect(0, 0, view.width, view.height);
+		measureProfile("render", () => {
+			predictor.updateVisual();
+			const age = connection.stats.lastSnapshotAt
+				? performance.now() - connection.stats.lastSnapshotAt
+				: 0;
+			const stats = {
+				...connection.stats,
+				snapshotAgeMs: age,
+				interpolationDelayMs: matchView.interpolationDelayMs,
+				tick: matchView.tick,
+			};
+			ctx.clearRect(0, 0, view.width, view.height);
 
-		const scale = Math.min(
-			view.width / matchView.arena.width,
-			view.height / matchView.arena.height,
-		);
-		ctx.save();
-		ctx.translate(
-			(view.width - matchView.arena.width * scale) / 2,
-			(view.height - matchView.arena.height * scale) / 2,
-		);
-		ctx.scale(scale, scale);
-		drawArena(ctx, matchView.arena);
-		matchView.draw(ctx, alpha, assets.sprites);
-		predictor.draw(ctx, alpha, assets.sprites);
-		ctx.restore();
+			const scale = Math.min(
+				view.width / matchView.arena.width,
+				view.height / matchView.arena.height,
+			);
+			ctx.save();
+			ctx.translate(
+				(view.width - matchView.arena.width * scale) / 2,
+				(view.height - matchView.arena.height * scale) / 2,
+			);
+			ctx.scale(scale, scale);
+			drawArena(ctx, matchView.arena);
+			matchView.draw(ctx, alpha, assets.sprites);
+			predictor.draw(ctx, alpha, assets.sprites);
+			ctx.restore();
 
-		drawScoreboard(
-			ctx,
-			{ players: matchView.players, arena: matchView.arena },
-			view,
-			localId,
-			matchView.scores,
-		);
-		drawHud(ctx, loop.stats);
-		drawNetgraph(ctx, view, stats);
+			drawScoreboard(
+				ctx,
+				{ players: matchView.players, arena: matchView.arena },
+				view,
+				localId,
+				matchView.scores,
+			);
+			drawHud(ctx, loop.stats);
+			drawNetgraph(ctx, view, stats);
+		});
 	}
 
 	const loop = createLoop({
@@ -330,7 +341,13 @@ function startGame(
 		render,
 	});
 	if (params.has("debug")) {
-		window.__dogfight = { connection, matchView, predictor, loop };
+		window.__dogfight = {
+			connection,
+			matchView,
+			predictor,
+			loop,
+			profile: { measures: profileMeasures, clear: clearProfileMeasures },
+		};
 	}
 	loop.start();
 }

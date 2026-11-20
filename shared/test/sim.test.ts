@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { Game } from "../src/sim/game.ts";
 import type { EntityId, Intent } from "../src/types.ts";
 

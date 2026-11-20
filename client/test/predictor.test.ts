@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { Game } from "shared/sim/game.ts";
 import type { Ship } from "shared/sim/ship.ts";
 import type { Arena, EntityId, Intent, Snapshot } from "shared/types.ts";
 import { asSeq } from "shared/types.ts";
+import { test } from "vitest";
 import type { PredictorConnection } from "../src/net/predictor.ts";
 import { Predictor } from "../src/net/predictor.ts";
 

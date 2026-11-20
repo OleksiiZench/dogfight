@@ -1,3 +1,4 @@
+import type { ProfileMeasure } from "shared/profile.ts";
 import type { Loop } from "./src/loop.ts";
 import type { Connection } from "./src/net/connection.ts";
 import type { MatchView } from "./src/net/match.ts";
@@ -10,6 +11,10 @@ declare global {
 			matchView: MatchView;
 			predictor: Predictor;
 			loop: Loop;
+			profile: {
+				measures: (limit?: number) => ProfileMeasure[];
+				clear: () => void;
+			};
 		};
 	}
 }

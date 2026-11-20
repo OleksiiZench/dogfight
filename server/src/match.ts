@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
+import { beginProfile, endProfile } from "shared/profile.ts";
 import { intentOf } from "shared/protocol/input.ts";
 import type { SnapshotMessage } from "shared/protocol/schema.ts";
 import { Game } from "shared/sim/game.ts";
@@ -14,6 +15,7 @@ import type {
 	Tick,
 } from "shared/types.ts";
 import { asSeq, asTick } from "shared/types.ts";
+import { type Bot, createBots } from "./bots.ts";
 import type { Room, RoomPlayer } from "./rooms.ts";
 
 const COLORS = [
@@ -49,10 +51,14 @@ export interface MatchStatsSummary {
 	tickRate: number;
 	ticks: number;
 	meanDurationMs: number;
+	p95DurationMs: number;
+	p99DurationMs: number;
 	maxDurationMs: number;
 	meanJitterMs: number;
+	p99JitterMs: number;
 	maxJitterMs: number;
 	players: number;
+	bots: number;
 }
 
 export interface MatchEvents {
@@ -72,14 +78,25 @@ export class Match extends EventEmitter<MatchEvents> {
 	timer: NodeJS.Timeout | null;
 	nextTick: number;
 	stats: MatchStats;
+	bots: Bot[];
+	maxBots: number;
 	onJoin: (player: RoomPlayer) => void;
 	onLeave: (player: RoomPlayer) => void;
 
-	constructor(room: Room, { tickRate = 30 }: { tickRate?: number } = {}) {
+	constructor(
+		room: Room,
+		{
+			tickRate = 30,
+			maxBots = 16,
+		}: { tickRate?: number; maxBots?: number } = {},
+	) {
 		super();
+		this.setMaxListeners(0);
 		this.room = room;
 		this.stepSeconds = 1 / tickRate;
 		this.intervalMs = 1000 / tickRate;
+		this.maxBots = maxBots;
+		this.bots = [];
 		this.game = new Game({
 			seed: room.seed,
 			arena: room.arena,
@@ -122,6 +139,34 @@ export class Match extends EventEmitter<MatchEvents> {
 		this.lastSeq.delete(id);
 	}
 
+	setBots(requested: number): number {
+		const count = Math.max(0, Math.min(this.maxBots, Math.trunc(requested)));
+		while (this.bots.length > count) {
+			const bot = this.bots.pop();
+			if (!bot) break;
+			this.game.removePlayer(bot.id);
+			this.inputs.delete(bot.id);
+			this.lastSeq.delete(bot.id);
+		}
+		const nextBots = createBots(count);
+		for (let index = 0; index < nextBots.length; index++) {
+			const bot = nextBots[index];
+			if (!bot) continue;
+			if (this.bots[index]?.id === bot.id) continue;
+			const previous = this.bots[index];
+			if (previous) this.game.removePlayer(previous.id);
+			this.game.addPlayer({
+				id: bot.id,
+				name: bot.name,
+				color: bot.color,
+				fireDelay: bot.fireDelay,
+			});
+			this.bots[index] = bot;
+		}
+		this.bots.length = count;
+		return this.bots.length;
+	}
+
 	applyInput(
 		playerId: PlayerId,
 		input: InputFields & { type?: "input" },
@@ -148,6 +193,15 @@ export class Match extends EventEmitter<MatchEvents> {
 	}
 
 	step(): void {
+		const token = beginProfile("server:simulate");
+		try {
+			this.stepInner();
+		} finally {
+			endProfile(token, "server:simulate");
+		}
+	}
+
+	stepInner(): void {
 		const started = performance.now();
 		const intents = new Map<EntityId, Intent>();
 		for (const [playerId, input] of this.inputs) {
@@ -155,6 +209,10 @@ export class Match extends EventEmitter<MatchEvents> {
 			if (player?.ship?.alive) intents.set(player.ship.id, input);
 		}
 		this.inputs.clear();
+		for (const bot of this.bots) {
+			const ship = this.game.players.get(bot.id)?.ship;
+			if (ship?.alive) intents.set(ship.id, bot.update(this.game, this.tick));
+		}
 
 		const events = this.game.step(this.stepSeconds, intents);
 		this.tick = asTick(this.tick + 1);
@@ -197,16 +255,32 @@ export class Match extends EventEmitter<MatchEvents> {
 				: 0;
 		const max = (values: readonly number[]): number =>
 			values.length ? Math.max(...values) : 0;
+		const percentile = (
+			values: readonly number[],
+			fraction: number,
+		): number => {
+			if (values.length === 0) return 0;
+			const sorted = [...values].sort((a, b) => a - b);
+			return (
+				sorted[
+					Math.min(sorted.length - 1, Math.ceil(fraction * sorted.length) - 1)
+				] ?? 0
+			);
+		};
 		return {
 			id: this.room.id,
 			tick: this.tick,
 			tickRate: Math.round(1 / this.stepSeconds),
 			ticks: this.stats.ticks,
 			meanDurationMs: mean(this.stats.durations),
+			p95DurationMs: percentile(this.stats.durations, 0.95),
+			p99DurationMs: percentile(this.stats.durations, 0.99),
 			maxDurationMs: max(this.stats.durations),
 			meanJitterMs: mean(this.stats.jitter),
+			p99JitterMs: percentile(this.stats.jitter, 0.99),
 			maxJitterMs: max(this.stats.jitter),
 			players: this.game.players.size,
+			bots: this.bots.length,
 		};
 	}
 

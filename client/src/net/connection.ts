@@ -1,3 +1,4 @@
+import { measureProfile } from "shared/profile.ts";
 import type { ClientMessage, ServerMessage } from "shared/protocol.ts";
 import {
 	encodeMessage,
@@ -26,17 +27,19 @@ function encode(
 }
 
 function decodeServerMessage(data: unknown): ServerMessage | null {
-	if (typeof data === "string") {
-		const result = parseServerMessage(data);
-		return result.ok ? result.value : null;
-	}
-	if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-		const source: BinarySource = data;
-		const result = parseBinaryServerMessage(source);
-		if (!result.ok || result.value.type !== "snapshot") return null;
-		return result.value;
-	}
-	return null;
+	return measureProfile("decode", () => {
+		if (typeof data === "string") {
+			const result = parseServerMessage(data);
+			return result.ok ? result.value : null;
+		}
+		if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+			const source: BinarySource = data;
+			const result = parseBinaryServerMessage(source);
+			if (!result.ok || result.value.type !== "snapshot") return null;
+			return result.value;
+		}
+		return null;
+	});
 }
 
 function byteLength(data: unknown): number {

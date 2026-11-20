@@ -1,0 +1,38 @@
+{
+  "decision": "no-go",
+  "rows": [
+    {
+      "megabytes": 8,
+      "mainMs": 1.3935299999999984,
+      "clonePostMs": 80.212821,
+      "cloneRoundTripMs": 4.733879999999999,
+      "transferPostMs": 85.745071,
+      "transferRoundTripMs": 2.2178150000000016,
+      "workerMs": 1.976422999999997,
+      "cloneKeepsBuffer": true,
+      "transferDetachesBuffer": true
+    },
+    {
+      "megabytes": 32,
+      "mainMs": 29.040947999999986,
+      "clonePostMs": 311.949033,
+      "cloneRoundTripMs": 40.768659000000014,
+      "transferPostMs": 357.463487,
+      "transferRoundTripMs": 32.178135000000026,
+      "workerMs": 31.573797000000013,
+      "cloneKeepsBuffer": true,
+      "transferDetachesBuffer": true
+    },
+    {
+      "megabytes": 64,
+      "mainMs": 60.197505999999976,
+      "clonePostMs": 1161.162321,
+      "cloneRoundTripMs": 80.93501300000003,
+      "transferPostMs": 1248.885252,
+      "transferRoundTripMs": 63.82488000000012,
+      "workerMs": 63.37589600000001,
+      "cloneKeepsBuffer": true,
+      "transferDetachesBuffer": true
+    }
+  ]
+}

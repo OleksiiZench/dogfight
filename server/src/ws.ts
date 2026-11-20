@@ -6,6 +6,7 @@ import type { RawData } from "ws";
 import { WebSocket, WebSocketServer } from "ws";
 import type { ServerConfig } from "./config.ts";
 import { LatencyInjector } from "./latency.ts";
+import { createRateLimiter, heartbeat } from "./policy.ts";
 import {
 	CLOSE,
 	decodeBinaryClientMessage,
@@ -87,6 +88,7 @@ export function attachWebSocket(
 	server: Server,
 	{ config, rooms }: AttachWebSocketOptions,
 ): GameServer {
+	const rateLimiter = createRateLimiter(config.messagesPerSecond);
 	const wss = new WebSocketServer({
 		server,
 		path: "/ws",
@@ -216,15 +218,7 @@ export function attachWebSocket(
 	}
 
 	function allowMessage(state: ClientState, now: number): boolean {
-		const elapsed = now - state.lastRefill;
-		state.tokens = Math.min(
-			config.messagesPerSecond,
-			state.tokens + (elapsed * config.messagesPerSecond) / 1000,
-		);
-		state.lastRefill = now;
-		if (state.tokens < 1) return false;
-		state.tokens -= 1;
-		return true;
+		return rateLimiter.allow(state, now);
 	}
 
 	function onMessage(
@@ -365,8 +359,7 @@ export function attachWebSocket(
 			player: null,
 			codec: "json",
 			tickHandler: null,
-			tokens: config.messagesPerSecond,
-			lastRefill: Date.now(),
+			...rateLimiter.initial(Date.now()),
 			missedPongs: 0,
 			isAlive: true,
 			joinTimer: null,
@@ -418,22 +411,23 @@ export function attachWebSocket(
 		);
 	});
 
-	const heartbeat = setInterval(() => {
+	const heartbeatTimer = setInterval(() => {
 		for (const [socket, state] of clients) {
 			if (socket.readyState !== WebSocket.OPEN) continue;
-			if (!state.isAlive) state.missedPongs += 1;
-			if (state.missedPongs >= config.maxMissedPongs) {
+			const result = heartbeat(state, config.maxMissedPongs);
+			state.missedPongs = result.missedPongs;
+			state.isAlive = result.isAlive;
+			if (result.action === "terminate") {
 				socket.terminate();
 				continue;
 			}
-			state.isAlive = false;
 			socket.ping();
 		}
 	}, config.pingIntervalMs);
-	heartbeat.unref();
+	heartbeatTimer.unref();
 
 	async function close(): Promise<void> {
-		clearInterval(heartbeat);
+		clearInterval(heartbeatTimer);
 		for (const state of clients.values()) unsubscribeTicks(state);
 		const stopped = new Promise<void>((resolveClosed) =>
 			wss.close(() => resolveClosed()),

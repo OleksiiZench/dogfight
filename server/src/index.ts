@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setProfileEnabled } from "shared/profile.ts";
 import type { ServerConfig } from "./config.ts";
 import { loadConfig } from "./config.ts";
 import { HttpError, handleApi, sendJson } from "./http/router.ts";
@@ -16,6 +17,7 @@ import { RoomManager } from "./rooms.ts";
 import { attachWebSocket } from "./ws.ts";
 
 export async function createApp(config: ServerConfig = loadConfig()) {
+	setProfileEnabled(process.env.PROFILE === "1");
 	await mkdir(config.logDir, { recursive: true });
 	const definitionsValue: unknown = JSON.parse(
 		await readFile(config.roomsFile, "utf8"),

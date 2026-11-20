@@ -1,0 +1,61 @@
+{
+  "capacity": 64,
+  "rows": [
+    {
+      "clients": 8,
+      "bots": 16,
+      "meanTickMs": 4.773735944422362,
+      "p95TickMs": 6.6455010500002345,
+      "p99TickMs": 7.9990786249997425,
+      "maxTickMs": 10.045184000000063,
+      "p99JitterMs": 3.017442425000411,
+      "eventLoopUtilization": 0.3142404439303794,
+      "rssMb": 222.6796875,
+      "bytesInPerSec": 23457.4,
+      "bytesOutPerSec": 1815429.6,
+      "capacityExceeded": false
+    },
+    {
+      "clients": 32,
+      "bots": 16,
+      "meanTickMs": 7.819629039374908,
+      "p95TickMs": 9.062263725000411,
+      "p99TickMs": 10.489167150000094,
+      "maxTickMs": 12.178538999996817,
+      "p99JitterMs": 1.684361316666233,
+      "eventLoopUtilization": 0.3331374534884093,
+      "rssMb": 261.28515625,
+      "bytesInPerSec": 93625.4,
+      "bytesOutPerSec": 14443984.5,
+      "capacityExceeded": false
+    },
+    {
+      "clients": 64,
+      "bots": 16,
+      "meanTickMs": 16.159444705341958,
+      "p95TickMs": 26.613035102565426,
+      "p99TickMs": 33.676111641024946,
+      "maxTickMs": 38.11787699999695,
+      "p99JitterMs": 4.052766333334806,
+      "eventLoopUtilization": 0.5138296937631308,
+      "rssMb": 280.75390625,
+      "bytesInPerSec": 189079.58974358975,
+      "bytesOutPerSec": 50205633.333333336,
+      "capacityExceeded": true
+    },
+    {
+      "clients": 128,
+      "bots": 16,
+      "meanTickMs": 73.33325446622842,
+      "p95TickMs": 95.51253157894595,
+      "p99TickMs": 101.82919668420838,
+      "maxTickMs": 106.08363399999507,
+      "p99JitterMs": 78.07462819298019,
+      "eventLoopUtilization": 0.7850031334885799,
+      "rssMb": 274.74609375,
+      "bytesInPerSec": 325216.4210526316,
+      "bytesOutPerSec": 159811935.15789473,
+      "capacityExceeded": true
+    }
+  ]
+}

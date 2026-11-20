@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { profileMeasures } from "shared/profile.ts";
 import type { ServerConfig } from "../config.ts";
 import { listReplays, replayPath, streamReplay } from "../log/replay.ts";
 import type { Match } from "../match.ts";
@@ -115,6 +116,12 @@ export async function handleApi(
 		return true;
 	}
 
+	if (url.pathname === "/api/profile") {
+		if (req.method !== "GET") methodNotAllowed(res, "GET");
+		sendJson(res, 200, { measures: profileMeasures() });
+		return true;
+	}
+
 	if (url.pathname === "/api/slow") {
 		if (req.method !== "GET") methodNotAllowed(res, "GET");
 		busyWait(config.blockMs);
@@ -134,6 +141,37 @@ export async function handleApi(
 			return true;
 		}
 		methodNotAllowed(res, "GET, POST");
+	}
+
+	const botsRoute = /^\/api\/rooms\/([^/]+)\/bots$/.exec(url.pathname);
+	if (botsRoute) {
+		const roomId = decodeURIComponent(botsRoute[1] ?? "");
+		const room = rooms.get(roomId);
+		if (!room) throw new HttpError(404, "room not found");
+		const match = matches.get(roomId);
+		if (!match) throw new HttpError(404, "match not found");
+		if (req.method === "GET") {
+			sendJson(res, 200, { room: roomId, bots: match.bots.length });
+			return true;
+		}
+		if (req.method === "POST") {
+			const body = await readJsonBody(req, config.bodyMaxBytes);
+			const raw = body.count ?? body.bots ?? 0;
+			const count = Number(raw);
+			if (!Number.isInteger(count) || count < 0 || count > match.maxBots) {
+				throw new HttpError(
+					400,
+					`count has to be an integer between 0 and ${match.maxBots}`,
+				);
+			}
+			sendJson(res, 200, { room: roomId, bots: match.setBots(count) });
+			return true;
+		}
+		if (req.method === "DELETE") {
+			sendJson(res, 200, { room: roomId, bots: match.setBots(0) });
+			return true;
+		}
+		methodNotAllowed(res, "GET, POST, DELETE");
 	}
 
 	if (url.pathname === "/api/replays") {

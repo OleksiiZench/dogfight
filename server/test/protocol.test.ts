@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { encodeInput } from "shared/protocol/codec.ts";
+import { test } from "vitest";
 import {
 	CLOSE,
 	decodeBinaryClientMessage,

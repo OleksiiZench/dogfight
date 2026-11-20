@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test } from "vitest";
 import { attachMatchLog } from "../src/log/matchlog.ts";
 import { readNdjson } from "../src/log/replay.ts";
 import { Room } from "../src/rooms.ts";

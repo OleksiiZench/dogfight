@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "node --watch --env-file-if-exists=.env src/index.ts",
 		"start": "node --env-file-if-exists=.env src/index.ts",
-		"test": "node --test",
+		"test": "vitest run --config ../vitest.config.ts --project server",
 		"typecheck": "tsc -p tsconfig.json"
 	},
 	"dependencies": {

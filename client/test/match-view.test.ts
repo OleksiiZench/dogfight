@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import type { Arena, EntityData, PlayerId, Snapshot } from "shared/types.ts";
+import { test } from "vitest";
 import { MatchView } from "../src/net/match.ts";
 
 const arena: Arena = { width: 1200, height: 700 };

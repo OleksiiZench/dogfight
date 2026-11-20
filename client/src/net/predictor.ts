@@ -1,9 +1,10 @@
 import { lerp, lerpAngle } from "shared/math.ts";
+import { beginProfile, endProfile } from "shared/profile.ts";
 import { entityFromSnapshot, serializeEntity } from "shared/protocol.ts";
 import type { Bullet } from "shared/sim/bullet.ts";
 import type { AnyEntity } from "shared/sim/entity.ts";
 import type { Ship } from "shared/sim/ship.ts";
-import { Vector2 } from "shared/sim/vector.ts";
+import type { Vector2 } from "shared/sim/vector.ts";
 import type { WorldLike } from "shared/sim/world.ts";
 import { createStaticWorld } from "shared/sim/world.ts";
 import type {
@@ -13,21 +14,16 @@ import type {
 	GameEvent,
 	Intent,
 	PlayerId,
-	Point,
 	Snapshot,
 } from "shared/types.ts";
 import { asEntityId, asSeq } from "shared/types.ts";
 import { drawEntity } from "../render/draw.ts";
 import type { Sprites } from "../render/sprites.ts";
-
-function wrappedDistance(a: Point, b: Point, arena: Arena): number {
-	const dx = Math.abs(a.x - b.x);
-	const dy = Math.abs(a.y - b.y);
-	return Math.hypot(
-		Math.min(dx, arena.width - dx),
-		Math.min(dy, arena.height - dy),
-	);
-}
+import {
+	pendingAfterAck,
+	reconcileBulletKeys,
+	wrappedDistance,
+} from "./reconcile.ts";
 
 function shipFrom(data: EntityData, arena: Arena): Ship | null {
 	const entity = entityFromSnapshot(data, arena);
@@ -165,27 +161,33 @@ export class Predictor {
 	reconcileBullets(snapshot: Snapshot, ack: number): void {
 		this.arena = snapshot.arena ?? this.arena;
 		this.world.arena = this.arena;
-		const seen = new Set<number>();
-		for (const data of snapshot.entities ?? []) {
-			if (data.kind !== "bullet" || data.ownerId !== this.localId) continue;
-			const key = data.sourceSeq ?? data.id;
-			seen.add(key);
+		const result = reconcileBulletKeys(
+			snapshot,
+			this.localId,
+			ack,
+			this.predictedBullets.keys(),
+			this.confirmedBullets.keys(),
+		);
+		for (const { key, data } of result.confirmed) {
 			const bullet = bulletFrom(data, this.arena);
-			if (!bullet) continue;
-			this.confirmedBullets.set(key, bullet);
-			if (data.sourceSeq !== null && data.sourceSeq !== undefined) {
-				this.predictedBullets.delete(data.sourceSeq);
-			}
+			if (bullet) this.confirmedBullets.set(key, bullet);
 		}
-		for (const key of [...this.confirmedBullets.keys()]) {
-			if (!seen.has(key)) this.confirmedBullets.delete(key);
-		}
-		for (const [key] of [...this.predictedBullets]) {
-			if (key <= ack) this.predictedBullets.delete(key);
-		}
+		for (const key of result.confirmedToDelete)
+			this.confirmedBullets.delete(key);
+		for (const key of result.predictedToDelete)
+			this.predictedBullets.delete(key);
 	}
 
 	reconcile(snapshot: Snapshot, connection: PredictorConnection): void {
+		const token = beginProfile("reconcile");
+		try {
+			this.reconcileInner(snapshot, connection);
+		} finally {
+			endProfile(token, "reconcile");
+		}
+	}
+
+	reconcileInner(snapshot: Snapshot, connection: PredictorConnection): void {
 		this.reconcileBullets(snapshot, Number(snapshot.lastProcessedSeq ?? 0));
 		const ack = Number(snapshot.lastProcessedSeq ?? 0);
 		const data = snapshot.entities?.find(
@@ -210,7 +212,7 @@ export class Predictor {
 		connection.stats.correction = correction;
 		authoritative.world = asWorld(this.world);
 		this.ship = authoritative;
-		this.pending = this.pending.filter((record) => record.seq > ack);
+		this.pending = pendingAfterAck(this.pending, ack);
 		for (const record of this.pending) {
 			this.stepShip(record.intent, record.seq);
 			this.stepBullets();
@@ -235,7 +237,7 @@ export class Predictor {
 		const delta = Math.min((now - this.lastVisualAt) / 1000, 0.1);
 		this.lastVisualAt = now;
 		const blend = 1 - Math.exp(-delta / 0.05);
-		this.visualPos = new Vector2(
+		this.visualPos.set(
 			lerp(this.visualPos.x, this.ship.pos.x, blend),
 			lerp(this.visualPos.y, this.ship.pos.y, blend),
 		);

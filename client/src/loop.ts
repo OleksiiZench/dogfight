@@ -3,6 +3,8 @@ export interface LoopStats {
 	framesPerSecond: number;
 	frameTime: number;
 	workTime: number;
+	frameTimes: number[];
+	workTimes: number[];
 }
 
 export interface LoopOptions {
@@ -31,6 +33,8 @@ export function createLoop({
 		framesPerSecond: 0,
 		frameTime: 0,
 		workTime: 0,
+		frameTimes: [],
+		workTimes: [],
 	};
 
 	let running = false;
@@ -59,6 +63,8 @@ export function createLoop({
 		const rawDelta = now - last;
 		last = now;
 		stats.frameTime = rawDelta;
+		stats.frameTimes.push(rawDelta);
+		if (stats.frameTimes.length > 1800) stats.frameTimes.shift();
 
 		// clamp: after a long hitch, do not try to catch up forever
 		const delta = Math.min(rawDelta / 1000, 0.25);
@@ -80,6 +86,8 @@ export function createLoop({
 		}
 
 		stats.workTime = performance.now() - workStart;
+		stats.workTimes.push(stats.workTime);
+		if (stats.workTimes.length > 1800) stats.workTimes.shift();
 		frameCount++;
 
 		if (now - windowStart >= 1000) {

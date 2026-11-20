@@ -1,7 +1,7 @@
 import { lerp, lerpAngle } from "../math.ts";
 import type { Arena, EntityId, EntityKind, PlayerId } from "../types.ts";
 import { asEntityId } from "../types.ts";
-import { ARENA, wrapPosition } from "./arena.ts";
+import { ARENA, wrapPositionInPlace } from "./arena.ts";
 import type { Asteroid } from "./asteroid.ts";
 import type { Behavior } from "./behaviors.ts";
 import type { Bullet } from "./bullet.ts";
@@ -35,6 +35,7 @@ export interface EntityInit<K extends EntityKind> {
 export class Entity<K extends EntityKind = EntityKind> {
 	static #nextId = 1;
 	#id: EntityId;
+	#renderCache = new Vector2();
 
 	readonly kind: K;
 	pos: Vector2;
@@ -61,7 +62,7 @@ export class Entity<K extends EntityKind = EntityKind> {
 		this.#id = id ?? asEntityId(Entity.#nextId++);
 		this.kind = kind;
 		this.pos = pos;
-		this.prevPos = pos;
+		this.prevPos = new Vector2(pos.x, pos.y);
 		this.vel = vel;
 		this.angle = angle;
 		this.prevAngle = angle;
@@ -80,20 +81,21 @@ export class Entity<K extends EntityKind = EntityKind> {
 
 	// called by World at the start of every step, before input and update
 	savePrevious(): void {
-		this.prevPos = this.pos;
+		this.prevPos.set(this.pos.x, this.pos.y);
 		this.prevAngle = this.angle;
 	}
 
 	update(dt: number): void {
 		this.runBehaviors(dt);
-		this.pos = this.pos.add(this.vel.scale(dt));
+		this.pos.x += this.vel.x * dt;
+		this.pos.y += this.vel.y * dt;
 		this.handleEdges();
 		this.age += dt;
 	}
 
 	handleEdges(): void {
 		const arena: Arena = this.world?.arena ?? ARENA;
-		this.pos = wrapPosition(this.pos, arena);
+		wrapPositionInPlace(this.pos, arena);
 	}
 
 	kill(): void {
@@ -128,7 +130,7 @@ export class Entity<K extends EntityKind = EntityKind> {
 			Math.abs(this.pos.y - this.prevPos.y) > arena.height / 2;
 		// teleported across the arena edge: do not blend across the screen
 		if (jumped) return this.pos;
-		return new Vector2(
+		return this.#renderCache.set(
 			lerp(this.prevPos.x, this.pos.x, alpha),
 			lerp(this.prevPos.y, this.pos.y, alpha),
 		);

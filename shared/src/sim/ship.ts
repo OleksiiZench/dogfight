@@ -81,15 +81,16 @@ export class Ship extends Entity<"ship"> {
 		this.angle = normalizeAngle(this.angle + intent.turn * TURN_RATE * dt);
 		this.thrusting = Boolean(intent.thrust);
 		if (this.thrusting) {
-			this.vel = this.vel.add(Vector2.fromAngle(this.angle, THRUST * dt));
+			this.vel.x += Math.cos(this.angle) * THRUST * dt;
+			this.vel.y += Math.sin(this.angle) * THRUST * dt;
 		}
 		if (intent.fire) this.fire(intent.seq);
 	}
 
 	override update(dt: number): void {
-		this.vel = this.vel.scale(Math.exp(-DRAG * dt));
-		const speed = this.vel.length();
-		if (speed > MAX_SPEED) this.vel = this.vel.scale(MAX_SPEED / speed);
+		this.vel.scaleInPlace(Math.exp(-DRAG * dt));
+		const speed = Math.hypot(this.vel.x, this.vel.y);
+		if (speed > MAX_SPEED) this.vel.scaleInPlace(MAX_SPEED / speed);
 		super.update(dt);
 		this.cooldown = Math.max(0, this.cooldown - dt);
 	}
