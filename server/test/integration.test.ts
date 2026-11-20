@@ -4,36 +4,87 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { ServerMessage } from "shared/protocol.ts";
+import { parseServerMessage } from "shared/protocol.ts";
+import type { RawData } from "ws";
 import WebSocket from "ws";
-import { loadConfig } from "../src/config.js";
-import { createApp } from "../src/index.js";
+import { loadConfig } from "../src/config.ts";
+import { createApp } from "../src/index.ts";
+import { CLOSE } from "../src/protocol.ts";
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-async function connect(port) {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+function expectRecord(value: unknown, label: string): Record<string, unknown> {
+	if (!isRecord(value)) throw new Error(`${label} has to be an object`);
+	return value;
+}
+
+function expectArray(value: unknown, label: string): unknown[] {
+	if (!Array.isArray(value)) throw new Error(`${label} has to be an array`);
+	return value;
+}
+
+function expectNumber(value: unknown, label: string): number {
+	if (typeof value !== "number") throw new Error(`${label} has to be a number`);
+	return value;
+}
+
+function expectString(value: unknown, label: string): string {
+	if (typeof value !== "string") throw new Error(`${label} has to be a string`);
+	return value;
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+	const response = await fetch(url);
+	const value: unknown = await response.json();
+	return value;
+}
+
+function decodeMessage(data: RawData): ServerMessage | null {
+	const result = parseServerMessage(data.toString());
+	return result.ok ? result.value : null;
+}
+
+interface TestClient {
+	ws: WebSocket;
+	messages: ServerMessage[];
+}
+
+async function connect(port: number): Promise<TestClient> {
 	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-	const messages = [];
-	ws.on("message", (data) => messages.push(JSON.parse(data.toString())));
+	const messages: ServerMessage[] = [];
+	ws.on("message", (data: RawData) => {
+		const message = decodeMessage(data);
+		if (message) messages.push(message);
+	});
 	await once(ws, "open");
 	return { ws, messages };
 }
 
-async function waitFor(client, predicate, timeoutMs = 1500) {
+async function waitFor(
+	client: TestClient,
+	predicate: (message: ServerMessage) => boolean,
+	timeoutMs = 1500,
+): Promise<ServerMessage> {
 	const existing = client.messages.find(predicate);
 	if (existing) return existing;
-	return new Promise((resolve, reject) => {
+	return new Promise<ServerMessage>((resolve, reject) => {
 		const timer = setTimeout(() => {
 			cleanup();
 			reject(new Error("timed out waiting for message"));
 		}, timeoutMs);
-		const handler = (data) => {
-			const message = JSON.parse(data.toString());
-			if (predicate(message)) {
+		const handler = (data: RawData): void => {
+			const message = decodeMessage(data);
+			if (message && predicate(message)) {
 				cleanup();
 				resolve(message);
 			}
 		};
-		const cleanup = () => {
+		const cleanup = (): void => {
 			clearTimeout(timer);
 			client.ws.off("message", handler);
 		};
@@ -41,7 +92,10 @@ async function waitFor(client, predicate, timeoutMs = 1500) {
 	});
 }
 
-async function until(check, timeoutMs = 1500) {
+async function until<T>(
+	check: () => Promise<T | false>,
+	timeoutMs = 1500,
+): Promise<T> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		const value = await check();
@@ -68,23 +122,24 @@ test("http, rooms, chat and replay work together", async (t) => {
 		await rm(logDir, { recursive: true, force: true });
 	});
 	await app.listen();
-	const port = app.server.address().port;
+	const address = app.server.address();
+	if (!address || typeof address === "string")
+		throw new Error("server has no TCP port");
+	const port = address.port;
 	const base = `http://127.0.0.1:${port}`;
 
-	const health = await fetch(`${base}/health`).then((response) =>
-		response.json(),
-	);
+	const health = expectRecord(await fetchJson(`${base}/health`), "health");
 	assert.equal(health.ok, true);
-	assert.equal(health.rooms, 3);
-	const stats = await fetch(`${base}/api/stats`).then((response) =>
-		response.json(),
+	assert.equal(expectNumber(health.rooms, "health.rooms"), 3);
+	const stats = expectRecord(await fetchJson(`${base}/api/stats`), "stats");
+	const matches = expectArray(stats.matches, "stats.matches");
+	assert.equal(matches.length, 3);
+	const firstMatch = expectRecord(matches[0], "first match");
+	assert.equal(expectNumber(firstMatch.tickRate, "tickRate"), 30);
+	assert.equal(
+		expectArray(await fetchJson(`${base}/api/rooms`), "rooms").length,
+		3,
 	);
-	assert.equal(stats.matches.length, 3);
-	assert.equal(stats.matches[0].tickRate, 30);
-	const rooms = await fetch(`${base}/api/rooms`).then((response) =>
-		response.json(),
-	);
-	assert.equal(rooms.length, 3);
 
 	const alpha = await connect(port);
 	const beta = await connect(port);
@@ -100,6 +155,7 @@ test("http, rooms, chat and replay work together", async (t) => {
 		alpha,
 		(message) => message.type === "roster" && message.players.length === 2,
 	);
+	if (roster.type !== "roster") throw new Error("expected a roster message");
 	assert.deepEqual(roster.players.map((player) => player.name).sort(), [
 		"Alpha",
 		"Beta",
@@ -120,6 +176,8 @@ test("http, rooms, chat and replay work together", async (t) => {
 		alpha,
 		(message) => message.type === "snapshot" && message.lastProcessedSeq >= 1,
 	);
+	if (snapshot.type !== "snapshot")
+		throw new Error("expected a snapshot message");
 	assert.ok(snapshot.tick > 0);
 	assert.ok(snapshot.entities.some((entity) => entity.kind === "ship"));
 
@@ -128,30 +186,38 @@ test("http, rooms, chat and replay work together", async (t) => {
 	);
 	const alphaChat = await waitFor(alpha, (message) => message.type === "chat");
 	const betaChat = await waitFor(beta, (message) => message.type === "chat");
+	if (alphaChat.type !== "chat" || betaChat.type !== "chat")
+		throw new Error("expected chat messages");
 	assert.equal(alphaChat.text, "hello from lab 04");
 	assert.equal(betaChat.text, "hello from lab 04");
 
 	const bad = await connect(port);
 	bad.ws.send("{oops");
-	const [badCode] = await once(bad.ws, "close");
-	assert.equal(badCode, 4001);
+	const closeArgs = await once(bad.ws, "close");
+	const badCode: unknown = closeArgs[0];
+	assert.equal(badCode, CLOSE.INVALID_MESSAGE);
 
 	alpha.ws.close();
 	beta.ws.close();
 	await until(async () => {
-		const current = await fetch(`${base}/api/rooms`).then((response) =>
-			response.json(),
+		const current = expectArray(
+			await fetchJson(`${base}/api/rooms`),
+			"current rooms",
 		);
-		return !current.some((room) => room.id === "training");
+		return !current.some(
+			(room: unknown) => expectRecord(room, "room").id === "training",
+		);
 	});
 
 	const replayText = await until(async () => {
-		const replays = await fetch(`${base}/api/replays`).then((response) =>
-			response.json(),
+		const replays = expectArray(
+			await fetchJson(`${base}/api/replays`),
+			"replays",
 		);
 		for (const replay of replays) {
-			const text = await fetch(`${base}/api/replays/${replay.id}`).then(
-				(response) => response.text(),
+			const id = expectString(expectRecord(replay, "replay").id, "replay id");
+			const text = await fetch(`${base}/api/replays/${id}`).then((response) =>
+				response.text(),
 			);
 			if (text.includes("hello from lab 04")) return text;
 		}

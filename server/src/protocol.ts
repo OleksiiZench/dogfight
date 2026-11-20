@@ -1,158 +1,64 @@
-import { decodeInput, encodeSnapshot } from "shared/protocol/codec.js";
-import { validateInput } from "shared/protocol/input.js";
+import {
+	ProtocolError,
+	parseBinaryClientMessage,
+	parseClientMessage,
+} from "shared/protocol.ts";
 
-export const PROTOCOL_VERSION = 1;
+export { encodeMessage } from "shared/protocol/codec.ts";
+export { CLOSE, PROTOCOL_VERSION, ProtocolError } from "shared/protocol.ts";
 
-export const CLOSE = {
-	INVALID_MESSAGE: 4001,
-	OVERSIZE: 4002,
-	JOIN_TIMEOUT: 4003,
-	RATE_LIMIT: 4004,
-	NOT_JOINED: 4005,
-	UNKNOWN_ROOM: 4006,
-	POLICY: 4007,
-	SHUTDOWN: 4008,
-	SLOW_CLIENT: 1013,
-};
+import type { ParseOptions } from "shared/protocol/schema.ts";
+import type { ClientMessage } from "shared/protocol.ts";
+import type { BinarySource, InputMessage } from "shared/types.ts";
 
-export class ProtocolError extends Error {
-	constructor(code, message) {
-		super(message);
-		this.name = "ProtocolError";
-		this.code = code;
-	}
+const decoder = new TextDecoder();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-const ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
-
-function boundedText(value, name, maxLength, code = CLOSE.INVALID_MESSAGE) {
-	if (typeof value !== "string") {
-		throw new ProtocolError(code, `${name} has to be a string`);
-	}
-	const text = value.trim();
-	if (!text || text.length > maxLength) {
-		throw new ProtocolError(
-			code,
-			`${name} has to be 1..${maxLength} characters`,
+function toText(raw: unknown): string | null {
+	if (typeof raw === "string") return raw;
+	if (raw instanceof ArrayBuffer) return decoder.decode(raw);
+	if (ArrayBuffer.isView(raw))
+		return decoder.decode(
+			new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength),
 		);
-	}
-	return text;
+	return null;
 }
 
-function parse(raw, maxPayloadBytes) {
-	const text = typeof raw === "string" ? raw : raw.toString("utf8");
-	if (Buffer.byteLength(text) > maxPayloadBytes) {
-		throw new ProtocolError(CLOSE.OVERSIZE, "message is too large");
-	}
-	let value;
+function withDefaultJoinCodec(raw: unknown): unknown {
+	const text = toText(raw);
+	if (text === null) return raw;
 	try {
-		value = JSON.parse(text);
+		const value: unknown = JSON.parse(text);
+		if (isRecord(value) && value.type === "join" && !("codec" in value)) {
+			return JSON.stringify({ ...value, codec: "json" });
+		}
 	} catch {
-		throw new ProtocolError(CLOSE.INVALID_MESSAGE, "message is not valid JSON");
+		return raw;
 	}
-	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		throw new ProtocolError(
-			CLOSE.INVALID_MESSAGE,
-			"message has to be an object",
-		);
-	}
-	if (value.v !== PROTOCOL_VERSION) {
-		throw new ProtocolError(
-			CLOSE.INVALID_MESSAGE,
-			`unsupported protocol version: ${JSON.stringify(value.v)}`,
-		);
-	}
-	return value;
+	return raw;
 }
 
-export function decodeClientMessage(raw, options = {}) {
-	const {
-		maxPayloadBytes = 4096,
-		nameMaxLength = 24,
-		chatMaxLength = 240,
-	} = options;
-	const value = parse(raw, maxPayloadBytes);
-
-	switch (value.type) {
-		case "join": {
-			const room = boundedText(value.room, "room", 32);
-			if (!ID.test(room)) {
-				throw new ProtocolError(CLOSE.INVALID_MESSAGE, "invalid room id");
-			}
-			const codec = value.codec === "binary" ? "binary" : "json";
-			return {
-				type: "join",
-				room,
-				name: boundedText(value.name, "name", nameMaxLength),
-				codec,
-			};
-		}
-		case "chat":
-			return {
-				type: "chat",
-				text: boundedText(value.text, "text", chatMaxLength),
-			};
-		case "input":
-			try {
-				return validateInput(value);
-			} catch (error) {
-				throw new ProtocolError(CLOSE.INVALID_MESSAGE, error.message);
-			}
-		case "ping": {
-			const sent = Number(value.t);
-			if (!Number.isFinite(sent)) {
-				throw new ProtocolError(CLOSE.INVALID_MESSAGE, "ping needs t");
-			}
-			return { type: "ping", t: sent };
-		}
-		case "net": {
-			const latencyMs = Number(value.latencyMs ?? 0);
-			const jitterMs = Number(value.jitterMs ?? 0);
-			const dropRate = Number(value.dropRate ?? 0);
-			if (
-				!Number.isFinite(latencyMs) ||
-				!Number.isFinite(jitterMs) ||
-				!Number.isFinite(dropRate) ||
-				latencyMs < 0 ||
-				latencyMs > 2000 ||
-				jitterMs < 0 ||
-				jitterMs > 2000 ||
-				dropRate < 0 ||
-				dropRate > 1
-			) {
-				throw new ProtocolError(
-					CLOSE.INVALID_MESSAGE,
-					"invalid network simulation settings",
-				);
-			}
-			return { type: "net", latencyMs, jitterMs, dropRate };
-		}
-		case "leave":
-			return { type: "leave" };
-		default:
-			throw new ProtocolError(
-				CLOSE.INVALID_MESSAGE,
-				`unknown message type: ${value.type}`,
-			);
+export function decodeClientMessage(
+	raw: unknown,
+	options: ParseOptions = {},
+): ClientMessage {
+	const result = parseClientMessage(withDefaultJoinCodec(raw), options);
+	if (!result.ok) {
+		throw new ProtocolError(result.error.code, result.error.message);
 	}
+	return result.value;
 }
 
-export function decodeBinaryClientMessage(raw, options = {}) {
-	const { maxPayloadBytes = 4096 } = options;
-	const size = raw.byteLength ?? Buffer.byteLength(raw);
-	if (size > maxPayloadBytes) {
-		throw new ProtocolError(CLOSE.OVERSIZE, "message is too large");
+export function decodeBinaryClientMessage(
+	raw: BinarySource,
+	options: { maxPayloadBytes?: number } = {},
+): InputMessage {
+	const result = parseBinaryClientMessage(raw, options);
+	if (!result.ok) {
+		throw new ProtocolError(result.error.code, result.error.message);
 	}
-	try {
-		return decodeInput(raw);
-	} catch (error) {
-		throw new ProtocolError(CLOSE.INVALID_MESSAGE, error.message);
-	}
-}
-
-export function encodeMessage(message, codec = "json") {
-	if (codec === "binary" && message.type === "snapshot") {
-		return encodeSnapshot(message);
-	}
-	return JSON.stringify({ v: PROTOCOL_VERSION, ...message });
+	return result.value;
 }

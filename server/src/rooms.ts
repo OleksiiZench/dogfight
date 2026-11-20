@@ -1,14 +1,58 @@
 import { EventEmitter } from "node:events";
+import type { RoomInfo } from "shared/protocol/schema.ts";
+import type { Arena, GameEvent, PlayerId } from "shared/types.ts";
+import type { Match } from "./match.ts";
 
 export class RoomError extends Error {
-	constructor(status, message) {
+	readonly status: number;
+
+	constructor(status: number, message: string) {
 		super(message);
 		this.name = "RoomError";
 		this.status = status;
 	}
 }
 
-function identifier(value) {
+export interface RoomPlayer {
+	id: PlayerId;
+	name: string;
+}
+
+export interface RoomDefinition {
+	id: string;
+	name: string;
+	seed: number;
+	arena: Arena;
+	asteroidTarget: number;
+	capacity: number;
+}
+
+export interface RoomEventDetails {
+	player?: RoomPlayer;
+	text?: string;
+	game?: GameEvent;
+}
+
+export interface RoomEventBase {
+	t: string;
+	seq: number;
+	room: string;
+}
+
+export type RoomEvent<
+	T extends string = string,
+	D extends RoomEventDetails = RoomEventDetails,
+> = RoomEventBase & { type: T } & D;
+
+export type RoomChatEvent = RoomEvent<
+	"chat",
+	{ player: RoomPlayer; text: string }
+>;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+function identifier(value: unknown): string {
 	const id = String(value ?? "").trim();
 	if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(id)) {
 		throw new RoomError(400, "room id has to match [a-z0-9][a-z0-9_-]{0,31}");
@@ -16,7 +60,12 @@ function identifier(value) {
 	return id;
 }
 
-function boundedNumber(value, name, min, max) {
+function boundedNumber(
+	value: unknown,
+	name: string,
+	min: number,
+	max: number,
+): number {
 	const number = Number(value);
 	if (!Number.isInteger(number) || number < min || number > max) {
 		throw new RoomError(
@@ -27,11 +76,14 @@ function boundedNumber(value, name, min, max) {
 	return number;
 }
 
-export function normalizeRoomDefinition(raw, maxPlayersPerRoom) {
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+export function normalizeRoomDefinition(
+	raw: unknown,
+	maxPlayersPerRoom: number,
+): RoomDefinition {
+	if (!isRecord(raw)) {
 		throw new RoomError(400, "room definition has to be an object");
 	}
-	const arena = raw.arena ?? {};
+	const arena = isRecord(raw.arena) ? raw.arena : {};
 	return {
 		id: identifier(raw.id),
 		name: String(raw.name ?? "")
@@ -61,7 +113,17 @@ export function normalizeRoomDefinition(raw, maxPlayersPerRoom) {
 }
 
 export class Room extends EventEmitter {
-	constructor(definition) {
+	readonly id: string;
+	readonly name: string;
+	readonly seed: number;
+	readonly arena: Arena;
+	readonly asteroidTarget: number;
+	readonly capacity: number;
+	readonly players: Map<PlayerId, RoomPlayer>;
+	sequence: number;
+	match: Match | null = null;
+
+	constructor(definition: RoomDefinition) {
 		super();
 		this.id = definition.id;
 		this.name = definition.name || definition.id;
@@ -71,17 +133,22 @@ export class Room extends EventEmitter {
 		this.capacity = definition.capacity;
 		this.players = new Map();
 		this.sequence = 0;
-		this.on("error", (error) =>
+		this.on("error", (error: Error) =>
 			console.error(`[room ${this.id}]`, error.message),
 		);
 	}
 
-	get isEmpty() {
+	get isEmpty(): boolean {
 		return this.players.size === 0;
 	}
 
-	record(type, details = {}) {
-		const event = {
+	record<T extends string, D extends RoomEventDetails>(
+		type: T,
+		details: D,
+	): RoomEvent<T, D>;
+	record(type: string, details?: RoomEventDetails): RoomEvent;
+	record(type: string, details: RoomEventDetails = {}): RoomEvent {
+		const event: RoomEvent = {
 			t: new Date().toISOString(),
 			seq: ++this.sequence,
 			type,
@@ -92,7 +159,7 @@ export class Room extends EventEmitter {
 		return event;
 	}
 
-	join(player) {
+	join(player: RoomPlayer | null | undefined): RoomPlayer {
 		const id = String(player?.id ?? "").trim();
 		const name = String(player?.name ?? "")
 			.trim()
@@ -103,24 +170,25 @@ export class Room extends EventEmitter {
 		if (existing) return existing;
 		if (this.players.size >= this.capacity)
 			throw new RoomError(403, "room is full");
-		const entry = { id, name };
+		const entry: RoomPlayer = { id, name };
 		this.players.set(id, entry);
 		this.record("join", { player: entry });
 		this.emit("join", entry);
 		return entry;
 	}
 
-	leave(id) {
-		const player = this.players.get(String(id));
+	leave(id: string): RoomPlayer | null {
+		const key = String(id);
+		const player = this.players.get(key);
 		if (!player) return null;
-		this.players.delete(String(id));
+		this.players.delete(key);
 		this.record("leave", { player });
 		this.emit("leave", player);
 		if (this.isEmpty) this.emit("empty");
 		return player;
 	}
 
-	chat(id, text) {
+	chat(id: string, text: unknown): RoomChatEvent {
 		const player = this.players.get(String(id));
 		if (!player) throw new RoomError(403, "join the room before chatting");
 		const value = String(text ?? "").trim();
@@ -130,7 +198,7 @@ export class Room extends EventEmitter {
 		return event;
 	}
 
-	info() {
+	info(): RoomInfo {
 		return {
 			id: this.id,
 			name: this.name,
@@ -143,18 +211,32 @@ export class Room extends EventEmitter {
 		};
 	}
 
-	toJSON() {
+	toJSON(): RoomInfo {
 		return this.info();
 	}
 }
 
+export interface RoomManagerOptions {
+	definitions?: readonly unknown[];
+	maxRooms?: number;
+	maxPlayersPerRoom?: number;
+}
+
 export class RoomManager extends EventEmitter {
-	constructor({ definitions = [], maxRooms = 50, maxPlayersPerRoom = 8 } = {}) {
+	readonly rooms: Map<string, Room>;
+	readonly maxRooms: number;
+	readonly maxPlayersPerRoom: number;
+
+	constructor({
+		definitions = [],
+		maxRooms = 50,
+		maxPlayersPerRoom = 8,
+	}: RoomManagerOptions = {}) {
 		super();
 		this.rooms = new Map();
 		this.maxRooms = maxRooms;
 		this.maxPlayersPerRoom = maxPlayersPerRoom;
-		this.on("error", (error) => console.error("[rooms]", error.message));
+		this.on("error", (error: Error) => console.error("[rooms]", error.message));
 		for (const definition of definitions) {
 			try {
 				this.create(definition);
@@ -164,15 +246,15 @@ export class RoomManager extends EventEmitter {
 		}
 	}
 
-	list() {
+	list(): RoomInfo[] {
 		return [...this.rooms.values()].map((room) => room.info());
 	}
 
-	get(id) {
+	get(id: string): Room | null {
 		return this.rooms.get(String(id)) ?? null;
 	}
 
-	create(raw) {
+	create(raw: unknown): Room {
 		const definition = normalizeRoomDefinition(raw, this.maxPlayersPerRoom);
 		if (this.rooms.has(definition.id)) {
 			throw new RoomError(409, `room ${definition.id} already exists`);
@@ -187,10 +269,11 @@ export class RoomManager extends EventEmitter {
 		return room;
 	}
 
-	remove(id) {
-		const room = this.rooms.get(String(id));
+	remove(id: string): boolean {
+		const key = String(id);
+		const room = this.rooms.get(key);
 		if (!room) return false;
-		this.rooms.delete(String(id));
+		this.rooms.delete(key);
 		this.emit("removed", room);
 		return true;
 	}

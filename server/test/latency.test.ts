@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LatencyInjector } from "../src/latency.js";
+import { LatencyInjector } from "../src/latency.ts";
 
 test("latency injector clamps settings and drops packets", async () => {
 	const injector = new LatencyInjector();

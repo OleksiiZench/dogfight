@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { RoomManager } from "../src/rooms.js";
+import type { RoomEvent } from "../src/rooms.ts";
+import { RoomManager } from "../src/rooms.ts";
 
 const definition = {
 	id: "training",
@@ -14,8 +15,9 @@ const definition = {
 test("room records join, chat and leave", () => {
 	const manager = new RoomManager({ definitions: [definition], maxRooms: 2 });
 	const room = manager.get("training");
-	const events = [];
-	room.on("event", (event) => events.push(event.type));
+	assert.ok(room);
+	const events: string[] = [];
+	room.on("event", (event: RoomEvent) => events.push(event.type));
 
 	const player = room.join({ id: "p1", name: "Alpha" });
 	assert.equal(player.name, "Alpha");
@@ -29,6 +31,7 @@ test("room records join, chat and leave", () => {
 test("room manager deletes empty rooms and enforces limits", () => {
 	const manager = new RoomManager({ definitions: [definition], maxRooms: 2 });
 	const room = manager.get("training");
+	assert.ok(room);
 	room.join({ id: "p1", name: "Alpha" });
 	room.leave("p1");
 	assert.equal(manager.get("training"), null);

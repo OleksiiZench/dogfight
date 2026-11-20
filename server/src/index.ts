@@ -1,47 +1,59 @@
 import { mkdir, readFile } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./config.js";
-import { HttpError, handleApi, sendJson } from "./http/router.js";
-import { serveStatic } from "./http/static.js";
-import { attachMatchLog } from "./log/matchlog.js";
-import { Match } from "./match.js";
-import { RoomManager } from "./rooms.js";
-import { attachWebSocket } from "./ws.js";
+import type { ServerConfig } from "./config.ts";
+import { loadConfig } from "./config.ts";
+import { HttpError, handleApi, sendJson } from "./http/router.ts";
+import { serveStatic } from "./http/static.ts";
+import type { MatchLog } from "./log/matchlog.ts";
+import { attachMatchLog } from "./log/matchlog.ts";
+import { Match } from "./match.ts";
+import type { Room } from "./rooms.ts";
+import { RoomManager } from "./rooms.ts";
+import { attachWebSocket } from "./ws.ts";
 
-export async function createApp(config = loadConfig()) {
+export async function createApp(config: ServerConfig = loadConfig()) {
 	await mkdir(config.logDir, { recursive: true });
-	const definitions = JSON.parse(await readFile(config.roomsFile, "utf8"));
+	const definitionsValue: unknown = JSON.parse(
+		await readFile(config.roomsFile, "utf8"),
+	);
+	const definitions: readonly unknown[] = Array.isArray(definitionsValue)
+		? definitionsValue
+		: [];
 	const rooms = new RoomManager({
 		definitions,
 		maxRooms: config.maxRooms,
 		maxPlayersPerRoom: config.maxPlayersPerRoom,
 	});
-	const sockets = new Set();
-	const closeHooks = [];
+	const sockets = new Set<Socket>();
+	const closeHooks: Array<() => void | Promise<void>> = [];
 	const startedAt = Date.now();
-	let closing = null;
+	let closing: Promise<void> | null = null;
 
 	const server = createServer((req, res) => {
 		void handleRequest(req, res);
 	});
-	server.on("error", (error) => console.error("[http]", error.message));
-	server.on("connection", (socket) => {
+	server.on("error", (error: Error) => console.error("[http]", error.message));
+	server.on("connection", (socket: Socket) => {
 		sockets.add(socket);
 		socket.on("close", () => sockets.delete(socket));
-		socket.on("error", (error) => console.error("[socket]", error.message));
+		socket.on("error", (error: Error) =>
+			console.error("[socket]", error.message),
+		);
 	});
 
-	const logs = new Map();
-	const matches = new Map();
+	const logs = new Map<string, MatchLog>();
+	const matches = new Map<string, Match>();
 
-	function attachLog(room) {
+	function attachLog(room: Room): void {
 		const log = attachMatchLog(room, config);
 		logs.set(room.id, log);
 	}
 
-	function attachMatch(room) {
+	function attachMatch(room: Room): void {
 		const match = new Match(room, { tickRate: config.tickRate });
 		room.match = match;
 		matches.set(room.id, match);
@@ -52,11 +64,11 @@ export async function createApp(config = loadConfig()) {
 		attachLog(room);
 		attachMatch(room);
 	}
-	rooms.on("created", (room) => {
+	rooms.on("created", (room: Room) => {
 		attachLog(room);
 		attachMatch(room);
 	});
-	rooms.on("removed", (room) => {
+	rooms.on("removed", (room: Room) => {
 		const match = matches.get(room.id);
 		if (match) {
 			match.close();
@@ -78,7 +90,10 @@ export async function createApp(config = loadConfig()) {
 	const gameServer = attachWebSocket(server, { config, rooms });
 	closeHooks.push(() => gameServer.close());
 
-	async function handleRequest(req, res) {
+	async function handleRequest(
+		req: IncomingMessage,
+		res: ServerResponse,
+	): Promise<void> {
 		if (closing) {
 			sendJson(res, 503, { ok: false, error: "server is shutting down" });
 			return;
@@ -101,18 +116,18 @@ export async function createApp(config = loadConfig()) {
 		} catch (error) {
 			if (res.headersSent || res.destroyed) return;
 			sendJson(res, error instanceof HttpError ? error.status : 500, {
-				error: error.message,
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	}
 
-	function listen() {
-		return new Promise((resolveListen, rejectListen) => {
-			const onError = (error) => {
+	function listen(): Promise<void> {
+		return new Promise<void>((resolveListen, rejectListen) => {
+			const onError = (error: Error): void => {
 				server.off("listening", onListening);
 				rejectListen(error);
 			};
-			const onListening = () => {
+			const onListening = (): void => {
 				server.off("error", onError);
 				resolveListen();
 			};
@@ -122,18 +137,21 @@ export async function createApp(config = loadConfig()) {
 		});
 	}
 
-	async function close() {
+	async function close(): Promise<void> {
 		if (closing) return closing;
 		closing = (async () => {
 			for (const hook of closeHooks) {
 				try {
 					await hook();
 				} catch (error) {
-					console.error("[shutdown]", error.message);
+					console.error(
+						"[shutdown]",
+						error instanceof Error ? error.message : String(error),
+					);
 				}
 			}
-			const stopped = new Promise((resolveClosed) =>
-				server.close(resolveClosed),
+			const stopped = new Promise<void>((resolveClosed) =>
+				server.close(() => resolveClosed()),
 			);
 			for (const socket of sockets) socket.destroy();
 			await stopped;
@@ -161,7 +179,7 @@ const isMain =
 if (isMain) {
 	const app = await createApp();
 	let stopping = false;
-	const shutdown = (signal) => {
+	const shutdown = (signal: string): void => {
 		if (stopping) return;
 		stopping = true;
 		console.log(`[server] ${signal}, shutting down`);

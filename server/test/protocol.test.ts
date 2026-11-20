@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { encodeInput } from "shared/protocol/codec.js";
+import { encodeInput } from "shared/protocol/codec.ts";
 import {
 	CLOSE,
 	decodeBinaryClientMessage,
 	decodeClientMessage,
 	encodeMessage,
 	ProtocolError,
-} from "../src/protocol.js";
+} from "../src/protocol.ts";
 
 test("decodes valid join, chat and leave", () => {
 	assert.deepEqual(

@@ -1,15 +1,33 @@
 import { stat } from "node:fs/promises";
-import { listReplays, replayPath, streamReplay } from "../log/replay.js";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ServerConfig } from "../config.ts";
+import { listReplays, replayPath, streamReplay } from "../log/replay.ts";
+import type { Match } from "../match.ts";
+import type { RoomManager } from "../rooms.ts";
+import type { GameServer } from "../ws.ts";
 
 export class HttpError extends Error {
-	constructor(status, message) {
+	readonly status: number;
+
+	constructor(status: number, message: string) {
 		super(message);
 		this.name = "HttpError";
 		this.status = status;
 	}
 }
 
-export function sendJson(res, status, payload) {
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+export function sendJson(
+	res: ServerResponse,
+	status: number,
+	payload: unknown,
+): void {
 	const body = JSON.stringify(payload);
 	res.writeHead(status, {
 		"Content-Type": "application/json; charset=utf-8",
@@ -19,8 +37,11 @@ export function sendJson(res, status, payload) {
 	res.end(body);
 }
 
-export async function readJsonBody(req, maxBytes) {
-	const chunks = [];
+export async function readJsonBody(
+	req: AsyncIterable<Buffer>,
+	maxBytes: number,
+): Promise<Record<string, unknown>> {
+	const chunks: Buffer[] = [];
 	let size = 0;
 	for await (const chunk of req) {
 		size += chunk.length;
@@ -29,33 +50,45 @@ export async function readJsonBody(req, maxBytes) {
 	}
 	if (size === 0) return {};
 	try {
-		const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-		if (!value || typeof value !== "object" || Array.isArray(value)) {
-			throw new Error("body has to be an object");
-		}
+		const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+		if (!isRecord(value)) throw new Error("body has to be an object");
 		return value;
 	} catch (error) {
-		throw new HttpError(400, `invalid JSON body: ${error.message}`);
+		throw new HttpError(400, `invalid JSON body: ${messageOf(error)}`);
 	}
 }
 
-function methodNotAllowed(res, allow) {
+function methodNotAllowed(res: ServerResponse, allow: string): never {
 	res.setHeader("Allow", allow);
 	throw new HttpError(405, "method not allowed");
 }
 
-function busyWait(milliseconds) {
+function busyWait(milliseconds: number): void {
 	const until = Date.now() + milliseconds;
 	while (Date.now() < until) {}
 }
 
-export async function handleApi(req, res, url, context) {
+export interface ApiContext {
+	config: ServerConfig;
+	rooms: RoomManager;
+	startedAt: number;
+	gameServer?: GameServer;
+	matches?: ReadonlyMap<string, Match>;
+	logCount?: number;
+}
+
+export async function handleApi(
+	req: IncomingMessage,
+	res: ServerResponse,
+	url: URL,
+	context: ApiContext,
+): Promise<boolean> {
 	const {
 		config,
 		rooms,
 		startedAt,
 		gameServer,
-		matches = new Map(),
+		matches = new Map<string, Match>(),
 		logCount = 0,
 	} = context;
 

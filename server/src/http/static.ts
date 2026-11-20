@@ -1,11 +1,12 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 
-const MIME = {
+const MIME: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
-	".js": "text/javascript; charset=utf-8",
+	".ts": "text/javascript; charset=utf-8",
 	".css": "text/css; charset=utf-8",
 	".json": "application/json; charset=utf-8",
 	".ndjson": "application/x-ndjson; charset=utf-8",
@@ -16,18 +17,22 @@ const MIME = {
 	".map": "application/json; charset=utf-8",
 };
 
-function fail(res, status, message) {
+function fail(res: ServerResponse, status: number, message: string): void {
 	res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
 	res.end(message);
 }
 
-export async function serveStatic(req, res, root) {
+export async function serveStatic(
+	req: IncomingMessage,
+	res: ServerResponse,
+	root: string,
+): Promise<void> {
 	if (req.method !== "GET" && req.method !== "HEAD") {
 		fail(res, 405, "method not allowed");
 		return;
 	}
 
-	let pathname;
+	let pathname: string;
 	try {
 		pathname = decodeURIComponent(
 			new URL(req.url ?? "/", "http://localhost").pathname,

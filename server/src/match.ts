@@ -1,7 +1,20 @@
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
-import { intentOf } from "shared/protocol/input.js";
-import { Game } from "shared/sim/game.js";
+import { intentOf } from "shared/protocol/input.ts";
+import type { SnapshotMessage } from "shared/protocol/schema.ts";
+import { Game } from "shared/sim/game.ts";
+import type {
+	EntityId,
+	GameEvent,
+	InputFields,
+	Intent,
+	PlayerId,
+	Seq,
+	Snapshot,
+	Tick,
+} from "shared/types.ts";
+import { asSeq, asTick } from "shared/types.ts";
+import type { Room, RoomPlayer } from "./rooms.ts";
 
 const COLORS = [
 	"#4ade80",
@@ -21,8 +34,44 @@ const LOGGED_EVENTS = new Set([
 	"scoreChanged",
 ]);
 
+interface MatchStats {
+	ticks: number;
+	durations: number[];
+	jitter: number[];
+	lastDuration: number;
+	lastJitter: number;
+	previousTick: number | null;
+}
+
+export interface MatchStatsSummary {
+	id: string;
+	tick: Tick;
+	tickRate: number;
+	ticks: number;
+	meanDurationMs: number;
+	maxDurationMs: number;
+	meanJitterMs: number;
+	maxJitterMs: number;
+	players: number;
+}
+
 export class Match extends EventEmitter {
-	constructor(room, { tickRate = 30 } = {}) {
+	readonly room: Room;
+	readonly stepSeconds: number;
+	readonly intervalMs: number;
+	readonly game: Game;
+	tick: Tick;
+	inputs: Map<PlayerId, Intent>;
+	lastSeq: Map<PlayerId, Seq>;
+	snapshot: Snapshot;
+	events: GameEvent[];
+	timer: NodeJS.Timeout | null;
+	nextTick: number;
+	stats: MatchStats;
+	onJoin: (player: RoomPlayer) => void;
+	onLeave: (player: RoomPlayer) => void;
+
+	constructor(room: Room, { tickRate = 30 }: { tickRate?: number } = {}) {
 		super();
 		this.room = room;
 		this.stepSeconds = 1 / tickRate;
@@ -33,7 +82,7 @@ export class Match extends EventEmitter {
 			asteroidTarget: room.asteroidTarget,
 		});
 		this.game.start();
-		this.tick = 0;
+		this.tick = asTick(0);
 		this.inputs = new Map();
 		this.lastSeq = new Map();
 		this.snapshot = this.game.snapshot(this.tick);
@@ -48,52 +97,55 @@ export class Match extends EventEmitter {
 			lastJitter: 0,
 			previousTick: null,
 		};
-		this.onJoin = (player) => this.addPlayer(player);
-		this.onLeave = (player) => this.removePlayer(player.id);
+		this.onJoin = (player: RoomPlayer): void => this.addPlayer(player);
+		this.onLeave = (player: RoomPlayer): void => this.removePlayer(player.id);
 		room.on("join", this.onJoin);
 		room.on("leave", this.onLeave);
 	}
 
-	addPlayer(player) {
+	addPlayer(player: RoomPlayer): void {
 		if (this.game.players.has(player.id)) return;
 		this.game.addPlayer({
 			id: player.id,
 			name: player.name,
-			color: COLORS[this.game.players.size % COLORS.length],
+			color: COLORS[this.game.players.size % COLORS.length] ?? "#4ade80",
 		});
 	}
 
-	removePlayer(id) {
+	removePlayer(id: PlayerId): void {
 		this.game.removePlayer(id);
 		this.inputs.delete(id);
 		this.lastSeq.delete(id);
 	}
 
-	applyInput(playerId, input) {
+	applyInput(
+		playerId: PlayerId,
+		input: InputFields & { type?: "input" },
+	): boolean {
 		const player = this.game.players.get(playerId);
 		if (!player?.ship?.alive) return false;
-		const previous = this.lastSeq.get(playerId) ?? -1;
+		const previous = this.lastSeq.get(playerId) ?? asSeq(-1);
 		if (input.seq <= previous) return false;
-		this.lastSeq.set(playerId, input.seq);
+		this.lastSeq.set(playerId, asSeq(input.seq));
 		this.inputs.set(playerId, intentOf(input));
 		return true;
 	}
 
-	start() {
+	start(): void {
 		if (this.timer) return;
 		this.schedule();
 	}
 
-	schedule() {
+	schedule(): void {
 		const now = performance.now();
 		this.nextTick += this.intervalMs;
 		const wait = Math.max(0, this.nextTick - now);
 		this.timer = setTimeout(() => this.step(), wait);
 	}
 
-	step() {
+	step(): void {
 		const started = performance.now();
-		const intents = new Map();
+		const intents = new Map<EntityId, Intent>();
 		for (const [playerId, input] of this.inputs) {
 			const player = this.game.players.get(playerId);
 			if (player?.ship?.alive) intents.set(player.ship.id, input);
@@ -101,7 +153,7 @@ export class Match extends EventEmitter {
 		this.inputs.clear();
 
 		const events = this.game.step(this.stepSeconds, intents);
-		this.tick += 1;
+		this.tick = asTick(this.tick + 1);
 		for (const event of events) {
 			if (LOGGED_EVENTS.has(event.type))
 				this.room.record(event.type, { game: event });
@@ -126,7 +178,7 @@ export class Match extends EventEmitter {
 		this.schedule();
 	}
 
-	snapshotFor(playerId) {
+	snapshotFor(playerId: PlayerId): SnapshotMessage {
 		return {
 			...this.snapshot,
 			events: this.events,
@@ -134,12 +186,13 @@ export class Match extends EventEmitter {
 		};
 	}
 
-	getStats() {
-		const mean = (values) =>
+	getStats(): MatchStatsSummary {
+		const mean = (values: readonly number[]): number =>
 			values.length
 				? values.reduce((sum, value) => sum + value, 0) / values.length
 				: 0;
-		const max = (values) => (values.length ? Math.max(...values) : 0);
+		const max = (values: readonly number[]): number =>
+			values.length ? Math.max(...values) : 0;
 		return {
 			id: this.room.id,
 			tick: this.tick,
@@ -153,7 +206,7 @@ export class Match extends EventEmitter {
 		};
 	}
 
-	close() {
+	close(): void {
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = null;
 		this.room.off("join", this.onJoin);

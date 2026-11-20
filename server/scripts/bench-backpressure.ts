@@ -3,17 +3,33 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { loadConfig, rootDir } from "../src/config.js";
-import { createApp } from "../src/index.js";
+import { loadConfig, rootDir } from "../src/config.ts";
+import { createApp } from "../src/index.ts";
+
+interface RssSample {
+	t: number;
+	rss: number;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 const targetBytes = Number(process.env.BENCH_BYTES ?? 200 * 1024 * 1024);
 const throttleMs = Number(process.env.BENCH_THROTTLE_MS ?? 16);
 const sampleMs = Number(process.env.BENCH_SAMPLE_MS ?? 250);
 const assetsDir = resolve(rootDir, "docs/assets");
-const sleep = (ms) =>
-	new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+const sleep = (ms: number): Promise<void> =>
+	new Promise<void>((resolveSleep) => setTimeout(resolveSleep, ms));
 
-function renderSvg(samples, bytes) {
+async function fetchRss(base: string): Promise<number> {
+	const response = await fetch(`${base}/health`);
+	const health: unknown = await response.json();
+	if (!isRecord(health) || typeof health.rss !== "number")
+		throw new Error("invalid health response");
+	return health.rss;
+}
+
+function renderSvg(samples: readonly RssSample[], bytes: number): string {
 	const width = 900;
 	const height = 420;
 	const left = 70;
@@ -26,8 +42,9 @@ function renderSvg(samples, bytes) {
 	const minY = Math.floor(Math.min(...values));
 	const maxY = Math.ceil(Math.max(...values));
 	const spanY = Math.max(1, maxY - minY);
-	const x = (t) => left + ((t - minT) / (maxT - minT)) * (width - left - right);
-	const y = (rss) =>
+	const x = (t: number): number =>
+		left + ((t - minT) / (maxT - minT)) * (width - left - right);
+	const y = (rss: number): number =>
 		top + (1 - (rss / 1024 / 1024 - minY) / spanY) * (height - top - bottom);
 	const points = samples.map(
 		(sample) => `${x(sample.t).toFixed(1)},${y(sample.rss).toFixed(1)}`,
@@ -50,7 +67,7 @@ ${xTicks}
 </svg>`;
 }
 
-async function* generateLines(totalBytes) {
+async function* generateLines(totalBytes: number): AsyncGenerator<string> {
 	let written = 0;
 	let sequence = 0;
 	const text = "x".repeat(160);
@@ -73,12 +90,15 @@ await mkdir(assetsDir, { recursive: true });
 const config = { ...loadConfig(process.env), port: 0 };
 const app = await createApp(config);
 await app.listen();
-const port = app.server.address().port;
+const address = app.server.address();
+if (!address || typeof address === "string")
+	throw new Error("server has no TCP port");
+const port = address.port;
 const base = `http://${config.host}:${port}`;
 const id = `bench-${Date.now()}`;
 const filePath = resolve(config.logDir, `${id}.ndjson`);
-const samples = [];
-let sampling = null;
+const samples: RssSample[] = [];
+let sampling: NodeJS.Timeout | null = null;
 
 try {
 	await pipeline(
@@ -87,17 +107,16 @@ try {
 	);
 	const started = Date.now();
 	sampling = setInterval(() => {
-		void fetch(`${base}/health`)
-			.then((response) => response.json())
-			.then((health) =>
-				samples.push({ t: Date.now() - started, rss: health.rss }),
-			)
+		void fetchRss(base)
+			.then((rss) => samples.push({ t: Date.now() - started, rss }))
 			.catch(() => {});
 	}, sampleMs);
 
 	const response = await fetch(`${base}/api/replays/${id}`);
 	if (!response.ok) throw new Error(`replay failed: HTTP ${response.status}`);
-	const reader = response.body.getReader();
+	const body = response.body;
+	if (!body) throw new Error("replay response has no body");
+	const reader = body.getReader();
 	let received = 0;
 	while (true) {
 		const { done, value } = await reader.read();
@@ -105,11 +124,11 @@ try {
 		received += value.byteLength;
 		await sleep(throttleMs);
 	}
-	clearInterval(sampling);
+	if (sampling) clearInterval(sampling);
 	sampling = null;
 	samples.push({
 		t: Date.now() - started,
-		rss: (await fetch(`${base}/health`).then((r) => r.json())).rss,
+		rss: await fetchRss(base),
 	});
 
 	const csv = ["t_ms,rss_bytes", ...samples.map((s) => `${s.t},${s.rss}`)].join(

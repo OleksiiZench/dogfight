@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, Server } from "node:http";
+import type { ClientMessage, ServerMessage } from "shared/protocol.ts";
+import type { BinarySource, CodecName } from "shared/types.ts";
+import type { RawData } from "ws";
 import { WebSocket, WebSocketServer } from "ws";
-import { LatencyInjector } from "./latency.js";
+import type { ServerConfig } from "./config.ts";
+import { LatencyInjector } from "./latency.ts";
 import {
 	CLOSE,
 	decodeBinaryClientMessage,
@@ -8,25 +13,87 @@ import {
 	encodeMessage,
 	PROTOCOL_VERSION,
 	ProtocolError,
-} from "./protocol.js";
+} from "./protocol.ts";
+import type { Room, RoomManager, RoomPlayer } from "./rooms.ts";
 
-function messageHint(data) {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+function messageHint(data: RawData): string | null {
 	try {
-		const value = JSON.parse(data.toString());
-		return value?.type ?? null;
+		const value: unknown = JSON.parse(data.toString());
+		if (isRecord(value) && typeof value.type === "string") return value.type;
+		return null;
 	} catch {
 		return null;
 	}
 }
 
-export function attachWebSocket(server, { config, rooms }) {
+function toBinarySource(data: RawData): BinarySource | null {
+	if (data instanceof ArrayBuffer) return data;
+	if (Array.isArray(data)) return Buffer.concat(data);
+	if (ArrayBuffer.isView(data)) return data;
+	return null;
+}
+
+function byteLengthOf(data: RawData): number {
+	if (Array.isArray(data))
+		return data.reduce((total, chunk) => total + chunk.byteLength, 0);
+	return data.byteLength;
+}
+
+export interface ClientState {
+	room: Room | null;
+	player: RoomPlayer | null;
+	codec: CodecName;
+	tickHandler: (() => void) | null;
+	tokens: number;
+	lastRefill: number;
+	missedPongs: number;
+	isAlive: boolean;
+	joinTimer: NodeJS.Timeout | null;
+}
+
+export interface WsStats {
+	droppedMessages: number;
+	closedSlowClients: number;
+	droppedPackets: number;
+	bytesIn: number;
+	bytesOut: number;
+	inputs: number;
+	snapshots: number;
+}
+
+export interface SendOptions {
+	critical?: boolean;
+	delayed?: boolean;
+	codec?: CodecName;
+}
+
+export interface GameServer {
+	wss: WebSocketServer;
+	clients: Map<WebSocket, ClientState>;
+	stats: WsStats;
+	latency: LatencyInjector;
+	close(): Promise<void>;
+}
+
+export interface AttachWebSocketOptions {
+	config: ServerConfig;
+	rooms: RoomManager;
+}
+
+export function attachWebSocket(
+	server: Server,
+	{ config, rooms }: AttachWebSocketOptions,
+): GameServer {
 	const wss = new WebSocketServer({
 		server,
 		path: "/ws",
 		maxPayload: config.maxPayloadBytes,
 	});
-	const clients = new Map();
-	const stats = {
+	const clients = new Map<WebSocket, ClientState>();
+	const stats: WsStats = {
 		droppedMessages: 0,
 		closedSlowClients: 0,
 		droppedPackets: 0,
@@ -37,13 +104,13 @@ export function attachWebSocket(server, { config, rooms }) {
 	};
 	const latency = new LatencyInjector(config);
 
-	wss.on("error", (error) => console.error("[ws]", error.message));
+	wss.on("error", (error: Error) => console.error("[ws]", error.message));
 
 	function send(
-		socket,
-		message,
-		{ critical = false, delayed = false, codec = "json" } = {},
-	) {
+		socket: WebSocket,
+		message: ServerMessage,
+		{ critical = false, delayed = false, codec = "json" }: SendOptions = {},
+	): void {
 		if (socket.readyState !== WebSocket.OPEN) return;
 		if (socket.bufferedAmount > config.slowClientBufferBytes) {
 			if (!critical) {
@@ -57,7 +124,10 @@ export function attachWebSocket(server, { config, rooms }) {
 			}
 		}
 		const payload = encodeMessage(message, codec);
-		stats.bytesOut += payload.byteLength ?? Buffer.byteLength(payload);
+		stats.bytesOut +=
+			typeof payload === "string"
+				? Buffer.byteLength(payload)
+				: payload.byteLength;
 		if (!delayed) {
 			socket.send(payload);
 			return;
@@ -75,23 +145,27 @@ export function attachWebSocket(server, { config, rooms }) {
 		});
 	}
 
-	function fail(socket, code, message) {
+	function fail(socket: WebSocket, code: number, message: string): void {
 		send(socket, { type: "error", code, message }, { critical: true });
 		if (socket.readyState === WebSocket.OPEN)
 			socket.close(code, message.slice(0, 100));
 	}
 
-	function roomSockets(room) {
+	function roomSockets(room: Room): WebSocket[] {
 		return [...clients.entries()]
 			.filter(([, state]) => state.room === room)
 			.map(([socket]) => socket);
 	}
 
-	function broadcast(room, message, options = {}) {
+	function broadcast(
+		room: Room,
+		message: ServerMessage,
+		options: SendOptions = {},
+	): void {
 		for (const socket of roomSockets(room)) send(socket, message, options);
 	}
 
-	function announceRoster(room) {
+	function announceRoster(room: Room): void {
 		broadcast(
 			room,
 			{ type: "roster", room: room.id, players: [...room.players.values()] },
@@ -99,7 +173,7 @@ export function attachWebSocket(server, { config, rooms }) {
 		);
 	}
 
-	function announceNetState() {
+	function announceNetState(): void {
 		for (const socket of clients.keys())
 			send(
 				socket,
@@ -108,12 +182,16 @@ export function attachWebSocket(server, { config, rooms }) {
 			);
 	}
 
-	function subscribeTicks(socket, state, room) {
+	function subscribeTicks(
+		socket: WebSocket,
+		state: ClientState,
+		room: Room,
+	): void {
 		unsubscribeTicks(state);
 		const match = room.match;
 		if (!match) return;
 		state.tickHandler = () => {
-			const snapshot = match.snapshotFor(state.player?.id);
+			const snapshot = match.snapshotFor(state.player?.id ?? "");
 			if (!snapshot) return;
 			stats.snapshots += 1;
 			send(socket, snapshot, { delayed: true, codec: state.codec });
@@ -121,13 +199,13 @@ export function attachWebSocket(server, { config, rooms }) {
 		match.on("tick", state.tickHandler);
 	}
 
-	function unsubscribeTicks(state) {
+	function unsubscribeTicks(state: ClientState): void {
 		if (!state.tickHandler) return;
 		state.room?.match?.off("tick", state.tickHandler);
 		state.tickHandler = null;
 	}
 
-	function leaveRoom(state) {
+	function leaveRoom(state: ClientState): void {
 		const { room, player } = state;
 		unsubscribeTicks(state);
 		state.room = null;
@@ -137,7 +215,7 @@ export function attachWebSocket(server, { config, rooms }) {
 		announceRoster(room);
 	}
 
-	function allowMessage(state, now) {
+	function allowMessage(state: ClientState, now: number): boolean {
 		const elapsed = now - state.lastRefill;
 		state.tokens = Math.min(
 			config.messagesPerSecond,
@@ -149,16 +227,23 @@ export function attachWebSocket(server, { config, rooms }) {
 		return true;
 	}
 
-	function onMessage(socket, state, data, isBinary) {
+	function onMessage(
+		socket: WebSocket,
+		state: ClientState,
+		data: RawData,
+		isBinary: boolean,
+	): void {
 		try {
 			if (!allowMessage(state, Date.now())) {
 				fail(socket, CLOSE.RATE_LIMIT, "too many messages");
 				return;
 			}
-			let message;
+			let message: ClientMessage;
 			if (isBinary) {
-				stats.bytesIn += data.byteLength;
-				message = decodeBinaryClientMessage(data, config);
+				stats.bytesIn += byteLengthOf(data);
+				const source = toBinarySource(data);
+				if (!source) throw new Error("binary message has to be binary data");
+				message = decodeBinaryClientMessage(source, config);
 			} else {
 				stats.bytesIn += Buffer.byteLength(data.toString());
 				message = decodeClientMessage(data, config);
@@ -203,7 +288,7 @@ export function attachWebSocket(server, { config, rooms }) {
 					);
 				}
 				const player = room.join({ id: randomUUID(), name: message.name });
-				clearTimeout(state.joinTimer);
+				if (state.joinTimer) clearTimeout(state.joinTimer);
 				state.joinTimer = null;
 				state.room = room;
 				state.player = player;
@@ -235,7 +320,8 @@ export function attachWebSocket(server, { config, rooms }) {
 					);
 				}
 				const event = state.room.chat(state.player.id, message.text);
-				broadcast(state.room, { type: "chat", ...event }, { critical: true });
+				const chatMessage: ServerMessage = { ...event };
+				broadcast(state.room, chatMessage, { critical: true });
 				return;
 			}
 
@@ -252,13 +338,16 @@ export function attachWebSocket(server, { config, rooms }) {
 			if (error instanceof ProtocolError)
 				fail(socket, error.code, error.message);
 			else {
-				console.error("[ws]", error.message);
+				console.error(
+					"[ws]",
+					error instanceof Error ? error.message : String(error),
+				);
 				fail(socket, CLOSE.POLICY, "internal error");
 			}
 		}
 	}
 
-	wss.on("connection", (socket, request) => {
+	wss.on("connection", (socket: WebSocket, request: IncomingMessage) => {
 		const url = new URL(request.url ?? "/", "http://localhost");
 		const hasNetParams = ["latency", "jitter", "drop"].some((key) =>
 			url.searchParams.has(key),
@@ -271,7 +360,7 @@ export function attachWebSocket(server, { config, rooms }) {
 			});
 		}
 
-		const state = {
+		const state: ClientState = {
 			room: null,
 			player: null,
 			codec: "json",
@@ -284,12 +373,14 @@ export function attachWebSocket(server, { config, rooms }) {
 		};
 		clients.set(socket, state);
 
-		socket.on("error", (error) => console.error("[ws socket]", error.message));
+		socket.on("error", (error: Error) =>
+			console.error("[ws socket]", error.message),
+		);
 		socket.on("pong", () => {
 			state.isAlive = true;
 			state.missedPongs = 0;
 		});
-		socket.on("message", (data, isBinary) => {
+		socket.on("message", (data: RawData, isBinary: boolean) => {
 			const hint = isBinary ? "input" : messageHint(data);
 			if (hint === "input" && latency.shouldDrop()) {
 				stats.droppedPackets += 1;
@@ -341,10 +432,12 @@ export function attachWebSocket(server, { config, rooms }) {
 	}, config.pingIntervalMs);
 	heartbeat.unref();
 
-	async function close() {
+	async function close(): Promise<void> {
 		clearInterval(heartbeat);
 		for (const state of clients.values()) unsubscribeTicks(state);
-		const stopped = new Promise((resolveClosed) => wss.close(resolveClosed));
+		const stopped = new Promise<void>((resolveClosed) =>
+			wss.close(() => resolveClosed()),
+		);
 		for (const [socket, state] of clients) {
 			if (state.joinTimer) clearTimeout(state.joinTimer);
 			if (socket.readyState === WebSocket.OPEN) {

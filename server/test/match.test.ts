@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { test } from "node:test";
-import { Match } from "../src/match.js";
-import { Room } from "../src/rooms.js";
+import type { EntityData } from "shared/types.ts";
+import { Match } from "../src/match.ts";
+import { Room } from "../src/rooms.ts";
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function room() {
 	return new Room({
@@ -35,7 +37,9 @@ test("match ticks at the configured rate and records the last input seq", async 
 	assert.ok(match.tick >= 2);
 	assert.equal(match.lastSeq.get(player.id), 42);
 	assert.equal(snapshot.lastProcessedSeq, 42);
-	assert.ok(snapshot.entities.some((entity) => entity.kind === "ship"));
+	assert.ok(
+		snapshot.entities.some((entity: EntityData) => entity.kind === "ship"),
+	);
 	assert.equal(match.getStats().tickRate, 30);
 	match.close();
 });
