@@ -9,20 +9,23 @@
 		"shared"
 	],
 	"engines": {
-		"node": ">=20.11"
+		"node": ">=26"
 	},
 	"scripts": {
-		"dev": "node scripts/dev.mjs",
+		"dev": "node scripts/dev.mts",
 		"build": "npm run build --workspace dogfight-client",
 		"preview": "npm run preview --workspace dogfight-client",
 		"start": "npm run start --workspace dogfight-server",
 		"test": "npm run test --workspaces --if-present",
-		"benchmark:netcode": "node scripts/benchmark-codec.mjs",
-		"record:netcode": "node scripts/record-netcode.mjs",
+		"typecheck": "tsc -p tsconfig.json && npm run typecheck --workspaces --if-present",
+		"benchmark:netcode": "node scripts/benchmark-codec.mts",
+		"record:netcode": "node scripts/record-netcode.mts",
 		"lint": "biome check .",
 		"fix": "biome check --write ."
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.6.8"
+		"@biomejs/biome": "2.6.8",
+		"@types/node": "^26.6.6",
+		"typescript": "^5.9.3"
 	}
 }
