@@ -4,7 +4,7 @@
 ухиляються від астероїдів і збирають пікапи. Server-authoritative WebSocket
 рушій, бінарний протокол, prediction/reconciliation, PWA і Prometheus-метрики.
 
-**Грати:** публічний URL з'явиться після деплою Fly.io (`fly.toml` і
+**Грати:** https://dogfight-oleksii-waw.fly.dev (`fly.toml` і
 `.github/workflows/deploy.yml` готові). Локально — `npm install && npm run dev`.
 
 ![Два гравці в одній кімнаті з netgraph](docs/assets/lab-05-two-player.gif)
@@ -1077,7 +1077,7 @@ heartbeats переживають idle timeout. `fly.toml` тримає один
   `registerSW.js` і precache; іконки 192/512 лежать у `client/public/icons`.
   Server віддає `.webmanifest` з коректним MIME.
 - **Uptime monitor:** після деплою додати externals checker на
-  `GET https://<app>.fly.dev/health` раз на хвилину.
+  `GET https://dogfight-oleksii-waw.fly.dev/health` раз на хвилину.
 - **Phone install:** Open in browser → Add to Home screen → запустити без адресного
   рядка. Цей крок вимагає реального телефона й публічного URL.
 - **Two strangers / real RTT:** локально перевірено двома браузерами; строгий

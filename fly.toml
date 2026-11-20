@@ -1,4 +1,4 @@
-app = "dogfight"
+app = "dogfight-oleksii-waw"
 primary_region = "waw"
 kill_signal = "SIGTERM"
 kill_timeout = "10s"
@@ -12,7 +12,7 @@ kill_timeout = "10s"
   HOST = "0.0.0.0"
   LOG_LEVEL = "info"
   VERSION = "dev"
-  ALLOWED_ORIGINS = "https://dogfight.fly.dev"
+  ALLOWED_ORIGINS = "https://dogfight-oleksii-waw.fly.dev"
   PING_INTERVAL_MS = "15000"
 
 [[services]]
