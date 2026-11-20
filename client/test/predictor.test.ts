@@ -36,11 +36,15 @@ function shipId(game: Game): EntityId {
 
 function snapshot(game: Game, tick: number, seq: number, offset = 0): Snapshot {
 	const result = game.snapshot(tick);
-	result.lastProcessedSeq = seq;
-	const ship = result.entities.find((entity) => entity.kind === "ship");
-	if (!ship) throw new Error("expected a ship snapshot");
-	ship.x += offset;
-	return result;
+	if (!result.entities.some((entity) => entity.kind === "ship"))
+		throw new Error("expected a ship snapshot");
+	return {
+		...result,
+		lastProcessedSeq: seq,
+		entities: result.entities.map((entity) =>
+			entity.kind === "ship" ? { ...entity, x: entity.x + offset } : entity,
+		),
+	};
 }
 
 test("reconciliation replays unacknowledged inputs deterministically", () => {

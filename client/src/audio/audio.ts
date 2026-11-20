@@ -1,3 +1,5 @@
+import type { Bus, GameEvents } from "../events/bus.ts";
+
 export interface AudioController {
 	readonly context: AudioContext;
 	set(name: string, buffer: AudioBuffer): void;
@@ -39,11 +41,12 @@ export function createAudio(): AudioController {
 	};
 }
 
-export function attachAudio(bus: EventTarget, audio: AudioController): void {
-	bus.addEventListener("fired", () => audio.play("shoot", { volume: 0.18 }));
-	bus.addEventListener("hit", () => audio.play("hit", { volume: 0.25 }));
-	bus.addEventListener("exploded", () =>
-		audio.play("explosion", { volume: 0.4 }),
-	);
-	bus.addEventListener("pickup", () => audio.play("pickup", { volume: 0.3 }));
+export function attachAudio(
+	bus: Bus<GameEvents>,
+	audio: AudioController,
+): void {
+	bus.on("fired", () => audio.play("shoot", { volume: 0.18 }));
+	bus.on("hit", () => audio.play("hit", { volume: 0.25 }));
+	bus.on("exploded", () => audio.play("explosion", { volume: 0.4 }));
+	bus.on("pickup", () => audio.play("pickup", { volume: 0.3 }));
 }
