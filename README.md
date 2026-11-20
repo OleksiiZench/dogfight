@@ -9,6 +9,7 @@
 - Лаба 3 (Promises, `async`/`await`, завантаження, лобі, звук): цей README, розділ «Лаба 3» нижче
 - Лаба 4 (Node.js, `EventEmitter`, streams, WebSocket): цей README, розділ «Лаба 4» нижче
 - Лаба 5 (authoritative server, prediction, interpolation, binary protocol): цей README, розділ «Лаба 5» нижче
+- Лаба 6 (strict TypeScript, typed protocol, runtime validation): тег `lab-06`, цей README, розділ «Лаба 6» нижче
 
 ![Два вікна браузера з двома гравцями при 100 мс ± 30 мс і 2% втрат](docs/assets/lab-05-two-player.gif)
 
@@ -20,6 +21,7 @@
     npm run start    # сервер віддає зібраний клієнт
     npm run test     # node:test
     npm run lint     # Biome
+    npm run typecheck # root + client + server + shared (tsc --noEmit)
     npm run benchmark:netcode  # JSON vs binary, 30 Гц, 4 гравці
     npm run record:netcode     # 20-секундний GIF двох вікон (потрібен ffmpeg)
 
@@ -28,25 +30,24 @@
 
 ## Структура
 
-    client/src/main.js            збирає гру, цикл і рендер
-    client/src/loop.js            фіксований крок 60 Гц (лаба 1)
-    client/src/input.js           замикання над станом клавіш
-    client/src/controls.js        клавіатура -> "намір" { turn, thrust, fire }
-    client/src/math.js            lerp, кути, seeded-генератор випадкових чисел
-    client/src/sim/vector.js      Vector2: чисті методи, що повертають нові вектори
-    client/src/sim/entity.js      Entity: id, pos, vel, radius, kind, update, behaviors
-    client/src/sim/ship.js        Ship extends Entity (приватний #hp, get hp, fire)
-    client/src/sim/bullet.js      Bullet extends Entity (TTL)
-    client/src/sim/asteroid.js    Asteroid extends Entity (відскок від крайів)
-    client/src/sim/pickup.js      Pickup extends Entity (ефект за ім'ям)
-    client/src/sim/explosion.js   Explosion extends Entity (масив частинок)
-    client/src/sim/behaviors.js   компоненти: timedEffect, homing, таблиця EFFECTS
-    client/src/sim/world.js       World поверх Map<id, Entity>
-    client/src/sim/collision.js   система колізій (коло-коло, O(n²))
-    client/src/sim/rules.js       що робити при зіткненні кожної пари видів
-    client/src/sim/game.js        гравці, рахунок, респаун, спавн астероїдів і пікапів
-    client/src/sim/bot.js         бот-замикання
-    client/src/render/            canvas із devicePixelRatio, малювання по видах
+    tsconfig.base.tson            strict TS-опції для всього workspace
+    shared/src/types.ts           брендовані id, Result, ProtocolFailure, assertNever
+    shared/src/protocol/schema.ts Zod v4 — source of truth для JSON-повідомлень
+    shared/src/protocol/codec.ts  DataView v1, little-endian, перевірка діапазонів
+    shared/src/protocol.ts        публічний фасад: parse*, codecs, ProtocolError
+    shared/src/sim/               детермінований світ, сутності, колізії, правила, Game
+    server/src/config.ts          env-конфіг через Zod-схему з дефолтами
+    server/src/index.ts           HTTP + WS, graceful shutdown
+    server/src/ws.ts              join/leave/chat, heartbeat, rate limit
+    server/src/match.ts           authoritative tick, input seq, реплеї
+    server/src/rooms.ts           Room extends EventEmitter, RoomManager
+    server/src/http/, log/        API, статика, NDJSON-логи й replay
+    client/src/main.ts            збирає завантаження, лобі, гру, цикл і рендер
+    client/src/loop.ts            фіксований крок 60 Гц (лаба 1)
+    client/src/net/               connection, lobby, matchView, predictor
+    client/src/render/, ui/       canvas із devicePixelRatio, HUD, лобі, чат
+    client/src/audio/, assets/    звук і завантаження асетів з AbortSignal
+    scripts/                      dev, benchmark-codec, record-netcode
 
 Спадкування — рівно один рівень: усі типи успадковують `Entity`, глибше нікуди.
 
@@ -79,9 +80,9 @@
 для мультиплеєра.
 
 **Колізії.** `findCollisions(entities)` — окрема функція, яка лише повертає пари,
-що перетинаються. Правила (`rules.js`) вирішують, що з парою робити, за таблицею
+що перетинаються. Правила (`rules.ts`) вирішують, що з парою робити, за таблицею
 `Map` ключів на кшталт `"bullet:ship"`. Перехід на просторове хешування змінить
-тільки `collision.js`.
+тільки `collision.ts`.
 
 ## Bug із `this`
 
@@ -158,8 +159,8 @@
 нового класу. Така форма «поведінка як дані» ще й легко серіалізується, що
 знадобиться в лабі 5.
 
-**Ціна.** Типи поведінок перевіряються під час виконання (`entity.control?.()`,
-`hasBehavior("shield")`), а не компілятором; потрібно слідкувати за іменами.
+**Ціна.** Назви behaviors і пікапів лишаються рядками з даних, тому їх перевіряє
+`hasBehavior("shield")` і Zod-схема `EffectNameSchema`, а не ієрархія класів.
 Виклики `hasBehavior` — це пошук у короткому масиві; для сотень сутностей це
 дрібниця, для тисяч варто було б перейти на бітові маски. Натомість нові
 можливості додаються без зміни існуючих класів, а ієрархія лишається плоскою.
@@ -176,31 +177,31 @@
 
 ### Що додано
 
-**M1 — асети й екран завантаження.** `public/assets/manifest.json` перелічує
+**M1 — асети й екран завантаження.** `public/assets/manifest.tson` перелічує
 спрайтшит, чотири WAV-звуки й опис арени; усі файли згенеровані локально, без
-мережі. `client/src/assets/loader.js` містить `fetchJson` (перевіряє `response.ok`),
+мережі. `client/src/assets/loader.ts` містить `fetchJson` (перевіряє `response.ok`),
 `loadImage`, `loadAudio`, `loadJson` (кожен приймає `AbortSignal`), `withRetry`
 (експоненційний backoff із джитером, 429/5xx — так, 4xx і скасування — ні) і
 `loadAll` через `Promise.all` із лічильником прогресу. Обов'язковий спрайтшит
 блокує старт і дає кнопку «Повторити»; звуки й арена необов'язкові — гра
 стартує з векторним fallback-малюнком і дефолтною ареною. Екран малюється на
-canvas (`client/src/ui/loading.js`) справжнім баром `done/total`.
+canvas (`client/src/ui/loading.ts`) справжнім баром `done/total`.
 
-**M2 — спрайти й звук.** `client/src/render/sprites.js` ріже аркуш на 4 кадри
-(`drawImage` з прямокутником джерела); `client/src/render/draw.js` малює дрон, кулю,
+**M2 — спрайти й звук.** `client/src/render/sprites.ts` ріже аркуш на 4 кадри
+(`drawImage` з прямокутником джерела); `client/src/render/draw.ts` малює дрон, кулю,
 астероїд і пікап спрайтами, лишаючи старий векторний шлях як запасний.
-`client/src/audio/audio.js` тримає `AudioContext`, декодує буфери ще на екрані
+`client/src/audio/audio.ts` тримає `AudioContext`, декодує буфери ще на екрані
 завантаження і запускає звук лише після жесту («Приєднатися» в лобі).
-Симуляція не імпортує аудіо чи HUD: `Ship.fire()` і `rules.js` пишуть події у
+Симуляція не імпортує аудіо чи HUD: `Ship.fire()` і `rules.ts` пишуть події у
 `world.emit`, `Game.processEvents()` передсилає їх у `EventTarget`-шину
-(`client/src/events/bus.js`), а `audio.js` і `client/src/ui/hud.js` слухають `fired`, `hit`,
+(`client/src/events/bus.ts`), а `audio.ts` і `client/src/ui/hud.ts` слухають `fired`, `hit`,
 `exploded`, `pickup`, `scoreChanged`.
 
-**M3 — лобі.** `server/data/rooms.json` — три кімнати зі своїми seed і розміром
-арени. `client/src/net/lobby.js` (`extends EventTarget`) робить `refresh()` кожні 4 с,
+**M3 — лобі.** `server/data/rooms.tson` — три кімнати зі своїми seed і розміром
+арени. `client/src/net/lobby.ts` (`extends EventTarget`) робить `refresh()` кожні 4 с,
 кожен запит має `AbortSignal.any([controller.signal, AbortSignal.timeout(6000)])`,
 а `leave()` все скасовує — осиротілих відповідей немає. Рендеринг лобі
-повністю окремий: `client/src/ui/lobbyView.js` лише слухає події. Вибір кімнати задає
+повністю окремий: `client/src/ui/lobbyView.ts` лише слухає події. Вибір кімнати задає
 seed, арену і кількість астероїдів для нової `Game`.
 
 **M4 — головоломки й галерея.** Нижче. Тег `lab-03` створюється після
@@ -221,7 +222,7 @@ seed, арену і кількість астероїдів для нової `G
 | `/?naive=1`      | старий баг із `this` із Лаби 2                                    |
 
 Debug-ендпоїнти (`/debug/slow`, `/debug/badjson`, `/debug/404`, `/debug/flaky`)
-живуть у `vite.config.js` і працюють у dev та preview.
+живуть у `vite.config.ts` і працюють у dev та preview.
 
 ### Послідовно vs `Promise.all`
 
@@ -316,7 +317,7 @@ Promise.all([slow, Promise.reject(new Error("fast"))]).catch((e) =>
 
 ### Галерея відмов
 
-Логи знято запуском `client/src/assets/loader.js` проти dev-сервера:
+Логи знято запуском `client/src/assets/loader.ts` проти dev-сервера:
 
 | Режим      | Лог                                                      | Відновлення                                                                  |
 | ---------- | -------------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -336,16 +337,16 @@ Promise.all([slow, Promise.reject(new Error("fast"))]).catch((e) =>
 
 Репозиторій розділено на npm workspaces: `client/` (Vite-застосунок із лоб 1–3)
 і `server/` (`node:http` + `ws`). Root-скрипти: `npm run dev` запускає обидва
-процеси через `scripts/dev.mjs`, `npm run build` збирає `client/dist`,
+процеси через `scripts/dev.mts`, `npm run build` збирає `client/dist`,
 `npm run start` віддає збірку через Node, `npm run test` запускає `node:test`.
 
-    server/src/index.js        HTTP-сервер, graceful shutdown, підключення WS і логів
-    server/src/config.js       PORT/HOST/LOG_DIR та ліміти з process.env, валідація
-    server/src/http/router.js  /health, /api/rooms, /api/replays, /api/slow
-    server/src/http/static.js  статика client/dist, MIME, захист від ..
-    server/src/rooms.js        Room extends EventEmitter, RoomManager
-    server/src/protocol.js     JSON v1, decodeClientMessage(), close codes
-    server/src/ws.js           join/leave/chat, heartbeat, rate limit, bufferedAmount
+    server/src/index.ts        HTTP-сервер, graceful shutdown, підключення WS і логів
+    server/src/config.ts       PORT/HOST/LOG_DIR та ліміти з process.env, валідація
+    server/src/http/router.ts  /health, /api/rooms, /api/replays, /api/slow
+    server/src/http/static.ts  статика client/dist, MIME, захист від ..
+    server/src/rooms.ts        Room extends EventEmitter, RoomManager
+    server/src/protocol.ts     JSON v1, decodeClientMessage(), close codes
+    server/src/ws.ts           join/leave/chat, heartbeat, rate limit, bufferedAmount
     server/src/log/            NDJSON Transform + stream-реплей
     server/scripts/            відтворюваний RSS-бенчмарк
     server/test/               node:test (конфіг, протокол, кімнати, логи, WS)
@@ -356,7 +357,7 @@ Promise.all([slow, Promise.reject(new Error("fast"))]).catch((e) =>
 сервер закриває WebSocket'и, дописує log-pipelines, закриває HTTP і виходить
 з кодом 0.
 
-У dev-режимі `client/vite.config.js` проксує `/api` і `/ws` на
+У dev-режимі `client/vite.config.ts` проксує `/api` і `/ws` на
 `http://127.0.0.1:3001`; `/health` не проксується, його треба відкривати напряму
 на `http://127.0.0.1:3001/health`. У продакшені всі шляхи обслуговує Node.
 
@@ -372,7 +373,7 @@ Promise.all([slow, Promise.reject(new Error("fast"))]).catch((e) =>
 
 `Room` — `EventEmitter` із подіями `join`, `leave`, `chat`, `event`, `empty`;
 порожня кімната видаляється `RoomManager` через подію `empty`. Клієнтський
-`client/src/net/connection.js` тримає чергу `send` під час підключення,
+`client/src/net/connection.ts` тримає чергу `send` під час підключення,
 робить reconnect з експоненційною паузою + jitter і повторює `join` після
 перепідключення. Чат доступний у лобі й поверх гри через один і той самий
 socket.
@@ -413,7 +414,7 @@ createWriteStream(LOG_DIR/<room>-<timestamp>.ndjson)` зібраний чере�
 (`droppedMessages` у `/health`); понад 4 MB — критичне повідомлення не шлеться,
 socket закривається з `1013`.
 
-Графік знято так: `server/scripts/bench-backpressure.js` генерує 200 MB NDJSON,
+Графік знято так: `server/scripts/bench-backpressure.ts` генерує 200 MB NDJSON,
 качає його через `/api/replays/:id` повільним reader'ом (256 KB на 16 мс) і
 опитує `/health` кожні 250 мс. Результат: 200 MB за 105.8 с, 423 заміри.
 
@@ -422,7 +423,7 @@ socket закривається з `1013`.
 Сирі дані: [docs/assets/lab-04-rss.csv](docs/assets/lab-04-rss.csv). Після
 первісного прогрівання RSS тримається близько 86–99 MB і не росте разом із
 обсягом відданих даних: `pipeline` не дає файловому потоку випередити повільного
-споживача. Відтворити: `node server/scripts/bench-backpressure.js`
+споживача. Відтворити: `node server/scripts/bench-backpressure.ts`
 (змінні `BENCH_BYTES`, `BENCH_THROTTLE_MS`, `BENCH_SAMPLE_MS`).
 
 **Що буде, якщо HTTP-обробник займе цикл подій на 300 мс.** Усі клієнти
@@ -512,7 +513,7 @@ HTTP-клієнт) і в політиці `bufferedAmount` для WS-сокет�
     node -e "const { EventEmitter } = require('node:events'); new EventEmitter().emit('error', new Error('boom'))"
     node -e "console.log(Buffer.from('привіт').length, 'привіт'.length, Buffer.from([0xff,0x00]).readUInt16BE(0))"
     npm run test
-    node server/scripts/bench-backpressure.js
+    node server/scripts/bench-backpressure.ts
 
 Останній рядок дає `12 6 65280`: `Buffer` рахує байти UTF-8, а `.length` —
 символи; `readUInt16BE` читає `0xff00` = 65280. У лабі 5 це стане частиною
@@ -534,7 +535,7 @@ reconciliation для себе й interpolation для інших.
 ### M1 — спільна симуляція й сервер
 
 `shared/` — третій npm workspace; `shared/src/sim/*` працює і в Node, і у Vite
-без DOM. `server/src/match.js` запускає цю саму симуляцію з фіксованим
+без DOM. `server/src/match.ts` запускає цю саму симуляцію з фіксованим
 `dt = 1/30`, застосовує останній валідний input гравця (`seq` монотонно зростає)
 і шле snapshot із `tick` та персональним `lastProcessedSeq`. Клієнт поки що
 малював тільки те, що сказав сервер: при 100 мс затримки корабель реагував із
@@ -556,7 +557,7 @@ RTT, вік snapshot, bytes/s, pending inputs і correction.
 `587.9 → 426.2`, correction ≈ 63px на зіткненнях і близько 0 у порожньому просторі.
 
 Перевірка детермінізації: тимчасово додав `Math.random()` у
-`shared/src/sim/ship.js`, prediction і сервер розійшлися — correction підскочила
+`shared/src/sim/ship.ts`, prediction і сервер розійшлися — correction підскочила
 до 262px; скріншот збережено. Потім код повернуто, `npm run test` і build
 перевірені знову.
 
@@ -564,7 +565,7 @@ RTT, вік snapshot, bytes/s, pending inputs і correction.
 
 ### M3 — interpolation і другий гравець
 
-`client/src/net/match.js` тримає історію snapshot'ів і малює чужі сутності на
+`client/src/net/match.ts` тримає історію snapshot'ів і малює чужі сутності на
 `now − interpolationDelay` (66 мс = два тіки при 30 Гц), беручи дві frame, що
 охоплюють цей момент. Позиції й кути інтерполюються, кут — через найкоротшу дугу
 (`lerpAngle`), тому перехід через `-π/π` не обертає корабель на 359°. Нові сутності
@@ -578,9 +579,9 @@ RTT, вік snapshot, bytes/s, pending inputs і correction.
 
 ### M4 — бінарний DataView-протокол
 
-Формат описаний коментарем на початку `shared/src/protocol/codec.js`: версія 1,
-усі числа little-endian. Input — 13 байт (`seq`, `tick`, `turn` як `Int16` у
-1/1000 рад, `thrust`, `fire`). Snapshot — `tick`, арена, гравці, сутності, події
+Формат описаний коментарем на початку `shared/src/protocol/codec.ts`: версія 1,
+усі числа little-endian. Input — 14 байт: 2-байтовий заголовок (`version`, `type`) плюс
+`seq`, `tick`, `turn` як `Int16` у 1/1000 рад, `thrust` і `fire`. Snapshot — `tick`, арена, гравці, сутності, події
 як JSON-хвіст і `lastProcessedSeq`; час у мс, вік у сантисекундах, кут у
 `Int16 × 1000`. Клієнт оголошує `binaryType = "arraybuffer"`; `hello` показує
 `["json", "binary"]`, `join` обирає кодек, за замовчуванням binary.
@@ -609,8 +610,8 @@ snapshot):
 Артефакти:
 [GIF двох вікон](docs/assets/lab-05-two-player.gif) (20 с, 10 fps),
 [скріншот корекції](docs/assets/lab-05-corrections.png),
-[скрипт бенчмарку](scripts/benchmark-codec.mjs),
-[скрипт запису](scripts/record-netcode.mjs).
+[скрипт бенчмарку](scripts/benchmark-codec.mts),
+[скрипт запису](scripts/record-netcode.mts).
 
 ### Reflection
 
@@ -674,3 +675,99 @@ big-endian — `1` (`0x0001`). Саме тому протокол явно пи�
 приєднайся до однієї кімнати, в чаті набери `/net 100 30 0.02`. У консолі
 `window.__dogfight` дає `connection`, `matchView`, `predictor` і `loop`.
 `?codec=json` перемикає сервер і клієнт на старий текстовий формат.
+
+## Лаба 6 — strict TypeScript
+
+Умови: [`lab-06-typescript.md`](../Programming-Practice-Projects/courses/javascript/lab-06-typescript.md),
+нотатки: [`lab-06-typescript.notes.md`](../Programming-Practice-Projects/courses/javascript/lab-06-typescript.notes.md).
+
+### Що зроблено
+
+**M1 — strict TS у всьому workspace.** Додано `tsconfig.base.json` із
+`strict`, `noUncheckedIndexedAccess`, `verbatimModuleSyntax`, `erasableSyntaxOnly`,
+`isolatedModules`, `noEmit`, `allowImportingTsExtensions` та `NodeNext`.
+Окремі конфіги є в root, `client/`, `server/`, `shared/`; клієнт додатково має
+`lib: ["ES2023", "DOM", "DOM.Iterable"]`. `npm run typecheck` запускає `tsc -p
+tsconfig.json` у root і `--workspaces --if-present` у всіх пакетах.
+Усі `.js`/`.mjs` перейменовано на `.ts`/`.mts`, у `.nvmrc` і `engines` — Node 26.
+Запуск і тести йдуть через native type stripping Node (`process.features.typescript
+=== "strip"`), без `tsx`/`ts-node` і без проміжного JS.
+
+**M2 — типи замість «просто об'єктів».** `shared/src/types.ts` описує брендовані
+`EntityId`, `Seq`, `Tick`, а також `PlayerId`, `Result`, `ProtocolFailure` і
+`assertNever`.
+Повідомлення та сутності — discriminated unions, кожен `switch` на `kind`/`type`
+завершується `assertNever`: новий вид не збереться, доки його не оброблено в
+codec, snapshot mapper і рендері. Виправлено старі антипатерни: interface merging
+в `sim/entity.ts` прибрано, `Ship.control` більше не `override`, а `sim/rules.ts`
+не повертає `void`-функцію зі стрілки.
+
+**M3 — runtime validation.** `shared/src/protocol/schema.ts` — Zod v4-схема для
+`ClientMessage`/`ServerMessage` із `PROTOCOL_VERSION = 1` і кодами `CLOSE`.
+Статичні типи виводяться з тих самих схем, тому serialize/deserialize не можуть
+розійтися. `server/src/config.ts` теж читає `process.env` через Zod-схему з
+дефолтами й перевіркою діапазонів. Бінарний codec окремо перевіряє версію, тип
+повідомлення, межі чисел і довжини рядків; невідомий `pickup` відхиляється
+через `EffectNameSchema`.
+
+**M4 — CI й документування.** `.github/workflows/ci.yml` виконує `npm ci`,
+`npm run typecheck`, `npm test`, `npm run lint`, `npm run build` на Node з
+`.nvmrc`. Цей README оновлено під `.ts`-структуру; у Лабі 5 виправлено розмір
+input: 14 байт, а не 13 (2 байти заголовка + 4 + 4 + 2 + 1 + 1).
+
+### What TypeScript found
+
+- Залишок `.js`-файлів у `shared/` падав із `ReferenceError: exports is not
+  defined in ES module scope`, поки не видалено stale-generated `.js` поруч із
+  `.ts` — Node 26 брав саме їх.
+- Два `tsconfig.json` мали `extends: "../../tsconfig.base.json"` замість
+  `../tsconfig.base.json`; `tsc` це одразу показав.
+- У бінарному codec читання `bullet` і `asteroid` ішло не в тому порядку, в
+  якому писалося (`ownerId`/`sourceSeq`, `hp`/`spin`), через що snapshot падав
+  із `truncated binary message`. Додано round-trip тест із tolerance 0.011.
+- `noUncheckedIndexedAccess` знайшов необроблені `undefined` у Map/масивах, а
+  DOM-типи — `null` для `querySelector`, `ctx`, `AudioContext` і `event.detail`.
+- `unknown` із `JSON.parse`/CDP довелося звужувати через `isRecord`; додано
+  явні типи для CDP-сесії, stdout-подій і WS-адреси.
+- `verbatimModuleSyntax` змусив розділити `import type` і значення, а
+  `erasableSyntaxOnly` — прибрати parameter properties, які не можна strip-нути.
+
+### Три типи, які варто відзначити
+
+1. `EntityId = Brand<number, "EntityId">` і друзі: звичайне число не підійде
+   для `despawn`, а створення брендованого значення зібране в одній
+   обгортці `branded<B>()`.
+2. `AnyEntity` / `ClientMessage` / `ServerMessage` — discriminated unions;
+   разом із `assertNever` вони перетворюють «додай новий вид сутності» у
+   перелік місць, які компілятор змусить оновити.
+3. `Result<T> = { ok: true; value: T } | { ok: false; error: ProtocolFailure }`
+   — помилки протоколу стали значенням із `CLOSE`, а не `throw` у довільному
+   місці; Zod-парсери повертають той самий `Result`.
+
+Локалізовані `as` лишилося рівно два: `branded<B>()` у `shared/src/types.ts`
+(єдине місце створення брендів) і `detailOf<T>()` у `client/src/events/bus.ts`
+(`CustomEvent<T>` не виводиться з `EventTarget`). Обидва мають коментар.
+Явного `any`, `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck` та імпортів
+`.js` немає; пошук `\bany\b` знаходить лише коментарі й `AbortSignal.any`.
+
+### Чому без UI-фреймворку
+
+DOM тут тонкий: LoadingScreen, LobbyView, HUD, ChatView і NetGraph малюють
+канвас/текст і слухають події; стан гри вже живе у чистих `Game`, `MatchView`
+і `Predictor`, які мають працювати в Node без DOM. React/Vue додали б залежність
+і власний lifecycle там, де достатньо `EventTarget` та явних DOM-перевірок.
+Мета лаби — показати TypeScript, а не замінити рендер.
+
+### Перевірка
+
+    npm run typecheck
+    npm run lint
+    npm test
+    npm run build
+    npm run benchmark:netcode
+
+Очікувано: typecheck проходить у root/client/server/shared; Biome перевіряє
+88 файлів без fixing; 19 тестів (client 5, server 10, shared 4); build дає
+`✓ 137 modules transformed`; benchmark повторює Лабу 5 — `4267/692 bytes,
+10 entities` для snapshot і 14 байт на input. У CI виконується той самий
+набір, окрім benchmark.
