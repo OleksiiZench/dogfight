@@ -1,33 +1,108 @@
-import { decodeBinaryMessage, encodeMessage } from "shared/protocol/codec.js";
-import { dispatch } from "../events/bus.js";
+import type { ClientMessage, ServerMessage } from "shared/protocol.ts";
+import {
+	encodeMessage,
+	parseBinaryServerMessage,
+	parseServerMessage,
+} from "shared/protocol.ts";
+import type {
+	BinarySource,
+	CodecName,
+	Intent,
+	WirePayload,
+} from "shared/types.ts";
+import { asSeq, asTick } from "shared/types.ts";
+import { dispatch } from "../events/bus.ts";
 
-export function defaultSocketUrl() {
+export function defaultSocketUrl(): string {
 	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 	return `${protocol}//${window.location.host}/ws${window.location.search}`;
 }
 
-function encode(message, codec = "json") {
+function encode(
+	message: ClientMessage,
+	codec: CodecName = "json",
+): WirePayload {
 	return encodeMessage(message, codec);
 }
 
-function decode(data) {
-	return data instanceof ArrayBuffer
-		? decodeBinaryMessage(data)
-		: JSON.parse(data);
+function decodeServerMessage(data: unknown): ServerMessage | null {
+	if (typeof data === "string") {
+		const result = parseServerMessage(data);
+		return result.ok ? result.value : null;
+	}
+	if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+		const source: BinarySource = data;
+		const result = parseBinaryServerMessage(source);
+		if (!result.ok || result.value.type !== "snapshot") return null;
+		return result.value;
+	}
+	return null;
 }
 
-function byteLength(data) {
+function byteLength(data: unknown): number {
 	if (typeof data === "string")
 		return new TextEncoder().encode(data).byteLength;
-	return data?.byteLength ?? data?.length ?? 0;
+	if (data instanceof ArrayBuffer) return data.byteLength;
+	if (ArrayBuffer.isView(data)) return data.byteLength;
+	if (typeof data === "object" && data !== null) {
+		if ("byteLength" in data && typeof data.byteLength === "number")
+			return data.byteLength;
+		if ("length" in data && typeof data.length === "number") return data.length;
+	}
+	return 0;
+}
+
+export interface ConnectionStats {
+	rttMs: number;
+	bytesIn: number;
+	bytesOut: number;
+	bytesInPerSec: number;
+	bytesOutPerSec: number;
+	snapshots: number;
+	lastSnapshotAt: number;
+	snapshotAgeMs: number;
+	pendingInputs: number;
+	correction: number;
+	interpolationDelayMs: number;
+}
+
+export interface ConnectionOptions {
+	url?: string;
+	minDelayMs?: number;
+	maxDelayMs?: number;
+}
+
+export interface JoinRequest {
+	room: string;
+	name: string;
+	codec: CodecName;
 }
 
 export class Connection extends EventTarget {
+	url: string;
+	minDelayMs: number;
+	maxDelayMs: number;
+	socket: WebSocket | null;
+	queue: WirePayload[];
+	joinRequest: JoinRequest | null;
+	roomId: string | null;
+	attempt: number;
+	timer: ReturnType<typeof setTimeout> | null;
+	pingTimer: ReturnType<typeof setInterval> | null;
+	intentional: boolean;
+	seq: number;
+	tick: number;
+	lastTick: number;
+	tickRate: number;
+	codec: CodecName;
+	rateWindow: { at: number; bytesIn: number; bytesOut: number };
+	stats: ConnectionStats;
+
 	constructor({
 		url = defaultSocketUrl(),
 		minDelayMs = 500,
 		maxDelayMs = 15000,
-	} = {}) {
+	}: ConnectionOptions = {}) {
 		super();
 		this.url = url;
 		this.minDelayMs = minDelayMs;
@@ -41,6 +116,8 @@ export class Connection extends EventTarget {
 		this.pingTimer = null;
 		this.intentional = false;
 		this.seq = 0;
+		this.tick = 0;
+		this.lastTick = 0;
 		this.tickRate = 30;
 		this.codec =
 			new URLSearchParams(window.location.search).get("codec") === "json"
@@ -62,7 +139,7 @@ export class Connection extends EventTarget {
 		};
 	}
 
-	connect() {
+	connect(): void {
 		if (
 			this.socket?.readyState === WebSocket.OPEN ||
 			this.socket?.readyState === WebSocket.CONNECTING
@@ -73,7 +150,7 @@ export class Connection extends EventTarget {
 		this.open();
 	}
 
-	open() {
+	open(): void {
 		const socket = new WebSocket(this.url);
 		socket.binaryType = "arraybuffer";
 		this.socket = socket;
@@ -105,7 +182,7 @@ export class Connection extends EventTarget {
 		});
 	}
 
-	startPings() {
+	startPings(): void {
 		this.stopPings();
 		this.pingTimer = setInterval(() => {
 			const now = performance.now();
@@ -125,12 +202,12 @@ export class Connection extends EventTarget {
 		}, 1000);
 	}
 
-	stopPings() {
+	stopPings(): void {
 		if (this.pingTimer) clearInterval(this.pingTimer);
 		this.pingTimer = null;
 	}
 
-	scheduleReconnect() {
+	scheduleReconnect(): void {
 		if (this.timer) return;
 		const exponential = this.minDelayMs * 2 ** Math.min(this.attempt, 10);
 		const delay =
@@ -143,13 +220,16 @@ export class Connection extends EventTarget {
 		}, delay);
 	}
 
-	rawSend(message) {
+	rawSend(message: ClientMessage): void {
 		const payload = encode(message, this.codec);
 		this.stats.bytesOut += byteLength(payload);
 		this.socket?.send(payload);
 	}
 
-	send(message, { queue = true } = {}) {
+	send(
+		message: ClientMessage,
+		{ queue = true }: { queue?: boolean } = {},
+	): void {
 		if (this.socket?.readyState === WebSocket.OPEN) {
 			this.rawSend(message);
 		} else if (queue) {
@@ -157,13 +237,19 @@ export class Connection extends EventTarget {
 		}
 	}
 
-	sendInput(intent, { seq = ++this.seq, tick = this.tick } = {}) {
+	sendInput(
+		intent: Intent,
+		{
+			seq = ++this.seq,
+			tick = this.tick,
+		}: { seq?: number; tick?: number } = {},
+	): void {
 		this.seq = Math.max(this.seq, seq);
 		this.send(
 			{
 				type: "input",
-				seq,
-				tick,
+				seq: asSeq(seq),
+				tick: asTick(tick),
 				turn: intent.turn,
 				thrust: intent.thrust,
 				fire: intent.fire,
@@ -172,7 +258,7 @@ export class Connection extends EventTarget {
 		);
 	}
 
-	join(room, name) {
+	join(room: string, name: string): void {
 		this.joinRequest = { room, name, codec: this.codec };
 		this.roomId = room;
 		if (this.socket?.readyState === WebSocket.OPEN) {
@@ -180,21 +266,26 @@ export class Connection extends EventTarget {
 		}
 	}
 
-	leave() {
+	leave(): void {
 		this.joinRequest = null;
 		this.roomId = null;
 		this.send({ type: "leave" });
 	}
 
-	chat(text) {
+	chat(text: string): void {
 		const net = text.match(/^\/net\s+(\d+)\s+(\d+)\s+([0-9.]+)$/);
 		if (net) {
-			this.send({
-				type: "net",
-				latencyMs: Number(net[1]),
-				jitterMs: Number(net[2]),
-				dropRate: Number(net[3]),
-			});
+			const latencyMs = net[1];
+			const jitterMs = net[2];
+			const dropRate = net[3];
+			if (latencyMs && jitterMs && dropRate) {
+				this.send({
+					type: "net",
+					latencyMs: Number(latencyMs),
+					jitterMs: Number(jitterMs),
+					dropRate: Number(dropRate),
+				});
+			}
 			return;
 		}
 		if (!this.roomId) {
@@ -204,7 +295,7 @@ export class Connection extends EventTarget {
 		this.send({ type: "chat", text });
 	}
 
-	close() {
+	close(): void {
 		this.intentional = true;
 		this.stopPings();
 		if (this.timer) clearTimeout(this.timer);
@@ -214,12 +305,15 @@ export class Connection extends EventTarget {
 		}
 	}
 
-	onMessage(event) {
+	onMessage(event: MessageEvent<unknown>): void {
 		try {
 			this.stats.bytesIn += byteLength(event.data);
-			const message = decode(event.data);
-			if (!message || typeof message !== "object") return;
-			this.lastTick = message.tick ?? this.lastTick;
+			const message = decodeServerMessage(event.data);
+			if (!message) {
+				dispatch(this, "notice", { message: "некоректна відповідь сервера" });
+				return;
+			}
+			if (message.type === "snapshot") this.lastTick = message.tick;
 			if (message.type === "hello" || message.type === "welcome") {
 				this.tickRate = Number(message.tickRate) || this.tickRate;
 			}
@@ -230,7 +324,7 @@ export class Connection extends EventTarget {
 			if (message.type === "pong") {
 				this.stats.rttMs = performance.now() - Number(message.t);
 			}
-			dispatch(this, message.type ?? "notice", message);
+			dispatch(this, message.type, message);
 		} catch {
 			dispatch(this, "notice", { message: "некоректна відповідь сервера" });
 		}

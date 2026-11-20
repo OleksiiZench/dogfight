@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MatchView } from "../src/net/match.js";
+import type { Arena, EntityData, PlayerId, Snapshot } from "shared/types.ts";
+import { MatchView } from "../src/net/match.ts";
 
-const arena = { width: 1200, height: 700 };
+const arena: Arena = { width: 1200, height: 700 };
 
-function ship(id, x, playerId = `p${id}`) {
+function ship(
+	id: number,
+	x: number,
+	playerId: PlayerId = `p${id}`,
+): EntityData {
 	return {
 		id,
 		kind: "ship",
@@ -26,29 +31,35 @@ function ship(id, x, playerId = `p${id}`) {
 	};
 }
 
-function snapshot(tick, entities) {
+function snapshot(tick: number, entities: EntityData[]): Snapshot {
 	return { type: "snapshot", tick, arena, players: [], entities };
 }
 
-function viewWith(frames) {
+function viewWith(frames: EntityData[][]): MatchView {
 	const view = new MatchView({ arena, interpolationDelayMs: 50 });
 	frames.forEach((entities, index) => {
 		view.applySnapshot(snapshot(index + 1, entities));
 	});
-	view.history[0].receivedAt = 0;
-	view.history[1].receivedAt = 100;
+	const first = view.history[0];
+	const second = view.history[1];
+	if (!first || !second) throw new Error("expected two snapshots");
+	first.receivedAt = 0;
+	second.receivedAt = 100;
 	return view;
 }
 
 test("remote entities interpolate between snapshots", () => {
 	const view = viewWith([[ship(1, 100)], [ship(1, 200)]]);
 	const [entity] = view.interpolatedEntities(100);
+	if (!entity) throw new Error("expected an interpolated entity");
 	assert.ok(Math.abs(entity.pos.x - 150) < 1e-6);
 });
 
 test("interpolation handles wrap-around and entity churn", () => {
 	const wrapped = viewWith([[ship(1, 1150)], [ship(1, 50)]]);
-	assert.ok(Math.abs(wrapped.interpolatedEntities(100)[0].pos.x) < 1e-6);
+	const [wrappedEntity] = wrapped.interpolatedEntities(100);
+	if (!wrappedEntity) throw new Error("expected an interpolated entity");
+	assert.ok(Math.abs(wrappedEntity.pos.x) < 1e-6);
 
 	const churn = viewWith([[ship(1, 100)], [ship(2, 200)]]);
 	assert.deepEqual(

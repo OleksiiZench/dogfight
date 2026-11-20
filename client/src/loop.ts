@@ -1,11 +1,32 @@
+export interface LoopStats {
+	stepsPerSecond: number;
+	framesPerSecond: number;
+	frameTime: number;
+	workTime: number;
+}
+
+export interface LoopOptions {
+	step?: number;
+	simulate(dt: number): void;
+	render(alpha: number): void;
+	scheduler?: "raf" | "interval";
+	fixed?: boolean;
+}
+
+export interface Loop {
+	readonly stats: LoopStats;
+	start(): void;
+	stop(): void;
+}
+
 export function createLoop({
 	step = 1 / 60,
 	simulate,
 	render,
 	scheduler = "raf",
 	fixed = true,
-}) {
-	const stats = {
+}: LoopOptions): Loop {
+	const stats: LoopStats = {
 		stepsPerSecond: 0,
 		framesPerSecond: 0,
 		frameTime: 0,
@@ -14,8 +35,8 @@ export function createLoop({
 
 	let running = false;
 	let rafId = 0;
-	let intervalId = 0;
-	let last = null;
+	let intervalId: ReturnType<typeof setInterval> | null = null;
+	let last: number | null = null;
 	let accumulator = 0;
 	let stepCount = 0;
 	let frameCount = 0;
@@ -25,7 +46,7 @@ export function createLoop({
 		if (scheduler === "raf") rafId = requestAnimationFrame(frame);
 	}
 
-	function frame(now) {
+	function frame(now: number) {
 		if (!running) return;
 
 		if (last === null) {
@@ -89,7 +110,8 @@ export function createLoop({
 	function stop() {
 		running = false;
 		cancelAnimationFrame(rafId);
-		clearInterval(intervalId);
+		if (intervalId !== null) clearInterval(intervalId);
+		intervalId = null;
 	}
 
 	return { start, stop, stats };

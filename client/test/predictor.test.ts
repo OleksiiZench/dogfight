@@ -1,27 +1,44 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Game } from "shared/sim/game.js";
-import { Predictor } from "../src/net/predictor.js";
+import { Game } from "shared/sim/game.ts";
+import type { Ship } from "shared/sim/ship.ts";
+import type { Arena, EntityId, Intent, Snapshot } from "shared/types.ts";
+import { asSeq } from "shared/types.ts";
+import type { PredictorConnection } from "../src/net/predictor.ts";
+import { Predictor } from "../src/net/predictor.ts";
 
 const dt = 1 / 30;
-const arena = { width: 1200, height: 700 };
-const intent = { turn: 0.2, thrust: true, fire: false };
+const arena: Arena = { width: 1200, height: 700 };
+const intent: Intent = { turn: 0.2, thrust: true, fire: false };
 
-function connection() {
+function connection(): PredictorConnection {
 	return { stats: { correction: 0, pendingInputs: 0 } };
 }
 
-function newGame() {
+function newGame(): Game {
 	const game = new Game({ seed: 3, arena, asteroidTarget: 0 });
 	game.addPlayer({ id: "p1", name: "Alpha", color: "#4ade80" });
 	game.start();
 	return game;
 }
 
-function snapshot(game, tick, seq, offset = 0) {
+function playerShip(game: Game): Ship {
+	const ship = game.players.get("p1")?.ship;
+	if (!ship) throw new Error("expected the local ship");
+	return ship;
+}
+
+function shipId(game: Game): EntityId {
+	const id = game.players.get("p1")?.shipId;
+	if (id === null || id === undefined) throw new Error("expected a ship id");
+	return id;
+}
+
+function snapshot(game: Game, tick: number, seq: number, offset = 0): Snapshot {
 	const result = game.snapshot(tick);
 	result.lastProcessedSeq = seq;
 	const ship = result.entities.find((entity) => entity.kind === "ship");
+	if (!ship) throw new Error("expected a ship snapshot");
 	ship.x += offset;
 	return result;
 }
@@ -33,14 +50,16 @@ test("reconciliation replays unacknowledged inputs deterministically", () => {
 	client.reconcile(snapshot(game, 0, 0), net);
 
 	for (let i = 1; i <= 3; i++) client.applyIntent(intent);
-	game.step(dt, new Map([[game.players.get("p1").shipId, intent]]));
+	game.step(dt, new Map<EntityId, Intent>([[shipId(game), intent]]));
 	client.reconcile(snapshot(game, 1, 1), net);
 
 	assert.equal(net.stats.pendingInputs, 2);
 	assert.ok(net.stats.correction > 0);
-	game.step(dt, new Map([[game.players.get("p1").shipId, intent]]));
-	game.step(dt, new Map([[game.players.get("p1").shipId, intent]]));
-	assert.ok(client.ship.pos.distanceTo(game.players.get("p1").ship.pos) < 1e-6);
+	game.step(dt, new Map<EntityId, Intent>([[shipId(game), intent]]));
+	game.step(dt, new Map<EntityId, Intent>([[shipId(game), intent]]));
+	const local = client.ship;
+	if (!local) throw new Error("expected a reconciled ship");
+	assert.ok(local.pos.distanceTo(playerShip(game).pos) < 1e-6);
 });
 
 test("reconciliation records authoritative correction magnitude", () => {
@@ -60,15 +79,14 @@ test("predicted bullet is replaced by the authoritative bullet by source seq", (
 
 	const record = client.applyIntent({ ...intent, fire: true });
 	assert.equal(client.predictedBullets.size, 1);
-	assert.equal([...client.predictedBullets.values()][0].sourceSeq, record.seq);
+	const predicted = [...client.predictedBullets.values()][0];
+	if (!predicted) throw new Error("expected a predicted bullet");
+	assert.equal(predicted.sourceSeq, record.seq);
 
 	game.step(
 		dt,
-		new Map([
-			[
-				game.players.get("p1").shipId,
-				{ ...intent, fire: true, seq: record.seq },
-			],
+		new Map<EntityId, Intent>([
+			[shipId(game), { ...intent, fire: true, seq: asSeq(record.seq) }],
 		]),
 	);
 	client.reconcile(snapshot(game, 1, record.seq), net);

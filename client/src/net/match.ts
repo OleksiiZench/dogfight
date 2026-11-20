@@ -1,8 +1,23 @@
-import { lerp, lerpAngle } from "shared/math.js";
-import { entityFromSnapshot } from "shared/protocol/snapshot.js";
-import { DRAW_ORDER, drawEntity } from "../render/draw.js";
+import { lerp, lerpAngle } from "shared/math.ts";
+import { entityFromSnapshot } from "shared/protocol.ts";
+import type { AnyEntity } from "shared/sim/entity.ts";
+import type { Ship } from "shared/sim/ship.ts";
+import type {
+	Arena,
+	EntityData,
+	PlayerId,
+	PlayerSnapshot,
+	Snapshot,
+} from "shared/types.ts";
+import { DRAW_ORDER, drawEntity } from "../render/draw.ts";
+import type { Sprites } from "../render/sprites.ts";
 
-function wrappedLerp(from, to, size, alpha) {
+function wrappedLerp(
+	from: number,
+	to: number,
+	size: number,
+	alpha: number,
+): number {
 	let delta = to - from;
 	if (delta > size / 2) delta -= size;
 	if (delta < -size / 2) delta += size;
@@ -10,7 +25,12 @@ function wrappedLerp(from, to, size, alpha) {
 	return ((value % size) + size) % size;
 }
 
-function interpolateData(previous, next, alpha, arena) {
+function interpolateData(
+	previous: EntityData,
+	next: EntityData,
+	alpha: number,
+	arena: Arena,
+): EntityData {
 	const data = { ...next };
 	data.x = wrappedLerp(previous.x, next.x, arena.width, alpha);
 	data.y = wrappedLerp(previous.y, next.y, arena.height, alpha);
@@ -21,16 +41,26 @@ function interpolateData(previous, next, alpha, arena) {
 	return data;
 }
 
-function framePair(frames, targetTime) {
+export interface SnapshotFrame {
+	tick: number;
+	receivedAt: number;
+	entities: Map<number, EntityData>;
+}
+
+function framePair(
+	frames: readonly SnapshotFrame[],
+	targetTime: number,
+): [SnapshotFrame, SnapshotFrame, number] | null {
 	const first = frames[0];
 	const last = frames[frames.length - 1];
-	if (!first) return null;
+	if (!first || !last) return null;
 	if (targetTime <= first.receivedAt || targetTime >= last.receivedAt) {
 		return [last, last, 0];
 	}
 	for (let i = 0; i < frames.length - 1; i++) {
 		const earlier = frames[i];
 		const later = frames[i + 1];
+		if (!earlier || !later) break;
 		if (targetTime <= later.receivedAt) {
 			const span = later.receivedAt - earlier.receivedAt;
 			return [
@@ -43,8 +73,24 @@ function framePair(frames, targetTime) {
 	return [last, last, 0];
 }
 
+export interface MatchViewOptions {
+	arena?: Arena | null;
+	interpolationDelayMs?: number;
+}
+
 export class MatchView extends EventTarget {
-	constructor({ arena, interpolationDelayMs = 66 } = {}) {
+	arena: Arena;
+	interpolationDelayMs: number;
+	tick: number;
+	entities: Map<number, AnyEntity>;
+	players: Map<PlayerId, PlayerSnapshot>;
+	scores: Map<PlayerId, number>;
+	lastEntityData: Map<number, EntityData>;
+	history: SnapshotFrame[];
+	excludeId: number | null;
+	excludeOwnerId: PlayerId | null;
+
+	constructor({ arena, interpolationDelayMs = 66 }: MatchViewOptions = {}) {
 		super();
 		this.arena = arena ?? { width: 1600, height: 900 };
 		this.interpolationDelayMs = interpolationDelayMs;
@@ -58,7 +104,7 @@ export class MatchView extends EventTarget {
 		this.excludeOwnerId = null;
 	}
 
-	applySnapshot(snapshot) {
+	applySnapshot(snapshot: Snapshot | null | undefined): boolean {
 		if (!snapshot || snapshot.tick <= this.tick) return false;
 		this.tick = snapshot.tick;
 		this.arena = snapshot.arena ?? this.arena;
@@ -84,22 +130,22 @@ export class MatchView extends EventTarget {
 		return true;
 	}
 
-	setInterpolationDelay(ms) {
+	setInterpolationDelay(ms: number): void {
 		this.interpolationDelayMs = Math.max(0, Math.min(500, ms));
 	}
 
-	shipOf(playerId) {
+	shipOf(playerId: PlayerId): Ship | null {
 		for (const entity of this.entities.values()) {
 			if (entity.kind === "ship" && entity.playerId === playerId) return entity;
 		}
 		return null;
 	}
 
-	interpolatedEntities(now = performance.now()) {
+	interpolatedEntities(now = performance.now()): AnyEntity[] {
 		const pair = framePair(this.history, now - this.interpolationDelayMs);
 		if (!pair) return [];
 		const [earlier, later, alpha] = pair;
-		const result = [];
+		const result: AnyEntity[] = [];
 		for (const [id, next] of later.entities) {
 			const previous = earlier === later ? null : earlier.entities.get(id);
 			const data =
@@ -112,7 +158,11 @@ export class MatchView extends EventTarget {
 		return result;
 	}
 
-	draw(ctx, alpha, sprites) {
+	draw(
+		ctx: CanvasRenderingContext2D,
+		alpha: number,
+		sprites: Sprites | null,
+	): void {
 		for (const kind of DRAW_ORDER) {
 			for (const entity of this.interpolatedEntities()) {
 				if (entity.id === this.excludeId) continue;

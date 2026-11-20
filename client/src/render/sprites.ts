@@ -1,11 +1,26 @@
 const FRAME = 128;
 
-function frame(image, index) {
+export interface SpriteFrame {
+	image: HTMLImageElement;
+	sx: number;
+	sy: number;
+	sw: number;
+	sh: number;
+}
+
+export interface Sprites {
+	ship: SpriteFrame;
+	bullet: SpriteFrame;
+	asteroid: SpriteFrame;
+	pickup: SpriteFrame;
+}
+
+function frame(image: HTMLImageElement, index: number): SpriteFrame {
 	return { image, sx: index * FRAME, sy: 0, sw: FRAME, sh: FRAME };
 }
 
-export function createSprites(sheet) {
-	if (!sheet) return null;
+export function createSprites(sheet: unknown): Sprites | null {
+	if (!(sheet instanceof HTMLImageElement)) return null;
 	return {
 		ship: frame(sheet, 0),
 		bullet: frame(sheet, 1),
@@ -14,7 +29,12 @@ export function createSprites(sheet) {
 	};
 }
 
-export function drawSprite(ctx, sprite, size, angle = 0) {
+export function drawSprite(
+	ctx: CanvasRenderingContext2D,
+	sprite: SpriteFrame | null | undefined,
+	size: number,
+	angle = 0,
+): boolean {
 	if (!sprite?.image) return false;
 	ctx.save();
 	ctx.rotate(angle);

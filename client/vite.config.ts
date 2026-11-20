@@ -1,8 +1,14 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Plugin, PreviewServer, ViteDevServer } from "vite";
 import { defineConfig } from "vite";
 
 let flakyAttempts = 0;
 
-function debugMiddleware(req, res, next) {
+function debugMiddleware(
+	req: IncomingMessage,
+	res: ServerResponse,
+	next: (error?: unknown) => void,
+): void {
 	const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
 
 	if (pathname === "/debug/slow") {
@@ -36,12 +42,12 @@ function debugMiddleware(req, res, next) {
 	next();
 }
 
-const debugAssets = {
+const debugAssets: Plugin = {
 	name: "lab-03-debug-assets",
-	configureServer(server) {
+	configureServer(server: ViteDevServer) {
 		server.middlewares.use(debugMiddleware);
 	},
-	configurePreviewServer(server) {
+	configurePreviewServer(server: PreviewServer) {
 		server.middlewares.use(debugMiddleware);
 	},
 };

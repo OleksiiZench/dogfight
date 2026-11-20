@@ -1,8 +1,15 @@
-export function createAudio() {
-	let ctx = null;
-	const buffers = new Map();
+export interface AudioController {
+	readonly context: AudioContext;
+	set(name: string, buffer: AudioBuffer): void;
+	unlock(): Promise<void>;
+	play(name: string, options?: { volume?: number }): void;
+}
 
-	function context() {
+export function createAudio(): AudioController {
+	let ctx: AudioContext | null = null;
+	const buffers = new Map<string, AudioBuffer>();
+
+	function context(): AudioContext {
 		if (!ctx) ctx = new AudioContext();
 		return ctx;
 	}
@@ -32,7 +39,7 @@ export function createAudio() {
 	};
 }
 
-export function attachAudio(bus, audio) {
+export function attachAudio(bus: EventTarget, audio: AudioController): void {
 	bus.addEventListener("fired", () => audio.play("shoot", { volume: 0.18 }));
 	bus.addEventListener("hit", () => audio.play("hit", { volume: 0.25 }));
 	bus.addEventListener("exploded", () =>

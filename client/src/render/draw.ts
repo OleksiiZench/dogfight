@@ -1,8 +1,25 @@
-import { EFFECTS } from "shared/sim/behaviors.js";
-import { RESPAWN_DELAY } from "shared/sim/game.js";
-import { drawSprite } from "./sprites.js";
+import type { Asteroid } from "shared/sim/asteroid.ts";
+import { EFFECTS } from "shared/sim/behaviors.ts";
+import type { Bullet } from "shared/sim/bullet.ts";
+import type { AnyEntity } from "shared/sim/entity.ts";
+import type { Explosion } from "shared/sim/explosion.ts";
+import { RESPAWN_DELAY } from "shared/sim/game.ts";
+import type { Pickup } from "shared/sim/pickup.ts";
+import type { Ship } from "shared/sim/ship.ts";
+import type {
+	Arena,
+	EntityKind,
+	PlayerId,
+	PlayerSnapshot,
+} from "shared/types.ts";
+import { assertNever } from "shared/types.ts";
+import type { LoopStats } from "../loop.ts";
+import type { ConnectionStats } from "../net/connection.ts";
+import type { ViewSize } from "./canvas.ts";
+import type { Sprites } from "./sprites.ts";
+import { drawSprite } from "./sprites.ts";
 
-export function drawArena(ctx, arena) {
+export function drawArena(ctx: CanvasRenderingContext2D, arena: Arena): void {
 	const { width, height } = arena;
 	ctx.save();
 	ctx.fillStyle = "#111827";
@@ -28,7 +45,7 @@ export function drawArena(ctx, arena) {
 }
 
 // FPV drone, top view, drawn at the origin pointing right (+x)
-function drawDrone(ctx, ship) {
+function drawDrone(ctx: CanvasRenderingContext2D, ship: Ship): void {
 	const arm = 22;
 
 	ctx.strokeStyle = "#94a3b8";
@@ -43,12 +60,13 @@ function drawDrone(ctx, ship) {
 	ctx.fillStyle = "rgba(148, 163, 184, 0.35)";
 	ctx.strokeStyle = "#cbd5e1";
 	ctx.lineWidth = 2;
-	for (const [sx, sy] of [
+	const corners: readonly (readonly [number, number])[] = [
 		[1, 1],
 		[1, -1],
 		[-1, 1],
 		[-1, -1],
-	]) {
+	];
+	for (const [sx, sy] of corners) {
 		ctx.beginPath();
 		ctx.arc(sx * arm, sy * arm, 12, 0, Math.PI * 2);
 		ctx.fill();
@@ -68,7 +86,12 @@ function drawDrone(ctx, ship) {
 	ctx.fill();
 }
 
-function drawShip(ctx, ship, alpha, sprites) {
+function drawShip(
+	ctx: CanvasRenderingContext2D,
+	ship: Ship,
+	alpha: number,
+	sprites: Sprites | null,
+): void {
 	const pos = ship.renderPos(alpha);
 	const angle = ship.renderAngle(alpha);
 	const hitFlash =
@@ -113,7 +136,12 @@ function drawShip(ctx, ship, alpha, sprites) {
 	ctx.restore();
 }
 
-function drawBullet(ctx, bullet, alpha, sprites) {
+function drawBullet(
+	ctx: CanvasRenderingContext2D,
+	bullet: Bullet,
+	alpha: number,
+	sprites: Sprites | null,
+): void {
 	const pos = bullet.renderPos(alpha);
 	const angle = Math.atan2(bullet.vel.y, bullet.vel.x);
 	ctx.save();
@@ -133,7 +161,12 @@ function drawBullet(ctx, bullet, alpha, sprites) {
 	ctx.restore();
 }
 
-function drawAsteroid(ctx, asteroid, alpha, sprites) {
+function drawAsteroid(
+	ctx: CanvasRenderingContext2D,
+	asteroid: Asteroid,
+	alpha: number,
+	sprites: Sprites | null,
+): void {
 	const pos = asteroid.renderPos(alpha);
 	const angle = asteroid.renderAngle(alpha);
 	const count = asteroid.shape.length;
@@ -148,7 +181,7 @@ function drawAsteroid(ctx, asteroid, alpha, sprites) {
 	ctx.beginPath();
 	for (let i = 0; i < count; i++) {
 		const a = (i / count) * Math.PI * 2;
-		const r = asteroid.radius * asteroid.shape[i];
+		const r = asteroid.radius * (asteroid.shape[i] ?? 1);
 		const x = Math.cos(a) * r;
 		const y = Math.sin(a) * r;
 		if (i === 0) ctx.moveTo(x, y);
@@ -163,9 +196,15 @@ function drawAsteroid(ctx, asteroid, alpha, sprites) {
 	ctx.restore();
 }
 
-function drawPickup(ctx, pickup, alpha, sprites) {
+function drawPickup(
+	ctx: CanvasRenderingContext2D,
+	pickup: Pickup,
+	alpha: number,
+	sprites: Sprites | null,
+): void {
 	const pos = pickup.renderPos(alpha);
 	const effect = EFFECTS.get(pickup.effect);
+	if (!effect) return;
 	const pulse = Math.sin(pickup.age * 4) * 2;
 
 	ctx.save();
@@ -187,7 +226,10 @@ function drawPickup(ctx, pickup, alpha, sprites) {
 	ctx.restore();
 }
 
-function drawExplosion(ctx, explosion) {
+function drawExplosion(
+	ctx: CanvasRenderingContext2D,
+	explosion: Explosion,
+): void {
 	ctx.save();
 	ctx.fillStyle = explosion.color;
 	for (const p of explosion.particles) {
@@ -199,22 +241,42 @@ function drawExplosion(ctx, explosion) {
 }
 
 // data-driven: one drawer per entity kind
-const DRAWERS = new Map([
-	["ship", drawShip],
-	["bullet", drawBullet],
-	["asteroid", drawAsteroid],
-	["pickup", drawPickup],
-	["explosion", drawExplosion],
-]);
+export const DRAW_ORDER: readonly EntityKind[] = [
+	"pickup",
+	"asteroid",
+	"bullet",
+	"ship",
+	"explosion",
+];
 
-// back to front
-export const DRAW_ORDER = ["pickup", "asteroid", "bullet", "ship", "explosion"];
-
-export function drawEntity(ctx, entity, alpha, sprites) {
-	DRAWERS.get(entity.kind)?.(ctx, entity, alpha, sprites);
+export function drawEntity(
+	ctx: CanvasRenderingContext2D,
+	entity: AnyEntity,
+	alpha: number,
+	sprites: Sprites | null,
+): void {
+	switch (entity.kind) {
+		case "ship":
+			drawShip(ctx, entity, alpha, sprites);
+			break;
+		case "bullet":
+			drawBullet(ctx, entity, alpha, sprites);
+			break;
+		case "asteroid":
+			drawAsteroid(ctx, entity, alpha, sprites);
+			break;
+		case "pickup":
+			drawPickup(ctx, entity, alpha, sprites);
+			break;
+		case "explosion":
+			drawExplosion(ctx, entity);
+			break;
+		default:
+			assertNever(entity);
+	}
 }
 
-export function drawHud(ctx, stats) {
+export function drawHud(ctx: CanvasRenderingContext2D, stats: LoopStats): void {
 	const lines = [
 		`steps/s:    ${stats.stepsPerSecond.toFixed(1)}`,
 		`frames/s:   ${stats.framesPerSecond.toFixed(1)}`,
@@ -232,7 +294,15 @@ export function drawHud(ctx, stats) {
 	ctx.restore();
 }
 
-export function drawNetgraph(ctx, view, stats) {
+export interface NetGraphStats extends ConnectionStats {
+	tick?: number;
+}
+
+export function drawNetgraph(
+	ctx: CanvasRenderingContext2D,
+	view: ViewSize,
+	stats: NetGraphStats,
+): void {
 	const lines = [
 		`rtt:       ${stats.rttMs.toFixed(0)} ms`,
 		`snap age:  ${stats.snapshotAgeMs.toFixed(0)} ms`,
@@ -253,7 +323,18 @@ export function drawNetgraph(ctx, view, stats) {
 	ctx.restore();
 }
 
-export function drawScoreboard(ctx, game, view, localId, scores) {
+export interface ScoreboardGame {
+	arena: Arena;
+	players: ReadonlyMap<PlayerId, PlayerSnapshot>;
+}
+
+export function drawScoreboard(
+	ctx: CanvasRenderingContext2D,
+	game: ScoreboardGame,
+	view: ViewSize,
+	localId: PlayerId,
+	scores: ReadonlyMap<PlayerId, number> | null | undefined,
+): void {
 	const players = [...game.players.values()];
 	const gap = 180;
 	const startX = view.width / 2 - ((players.length - 1) * gap) / 2;

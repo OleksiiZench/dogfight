@@ -1,46 +1,62 @@
 const DEFAULT_ATTEMPTS = 3;
 const DEFAULT_BASE_MS = 250;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+function errorName(error: unknown): string | undefined {
+	return isRecord(error) && typeof error.name === "string"
+		? error.name
+		: undefined;
+}
+
 export class HttpError extends Error {
-	constructor(status, url) {
+	readonly status: number;
+
+	constructor(status: number, url: string) {
 		super(`HTTP ${status} for ${url}`);
 		this.name = "HttpError";
 		this.status = status;
 	}
 }
 
-export function isClientError(error) {
+export function isClientError(error: unknown): boolean {
 	return (
 		error instanceof HttpError && error.status >= 400 && error.status < 500
 	);
 }
 
-export function isCancellation(error) {
-	return error?.name === "AbortError" || error?.name === "TimeoutError";
+export function isCancellation(error: unknown): boolean {
+	const name = errorName(error);
+	return name === "AbortError" || name === "TimeoutError";
 }
 
-export function isRetryable(error) {
+export function isRetryable(error: unknown): boolean {
 	if (isCancellation(error) || isClientError(error)) return false;
 	if (error instanceof HttpError) {
 		return error.status === 429 || error.status >= 500;
 	}
-	return error?.name === "TypeError" || error?.name === "NetworkError";
+	const name = errorName(error);
+	return name === "TypeError" || name === "NetworkError";
 }
 
 function abortError(message = "Aborted") {
 	return new DOMException(message, "AbortError");
 }
 
-function combinedSignal(signal, timeoutMs) {
-	const signals = [];
+function combinedSignal(
+	signal: AbortSignal | null | undefined,
+	timeoutMs: number | undefined,
+): AbortSignal | null {
+	const signals: AbortSignal[] = [];
 	if (signal) signals.push(signal);
 	if (timeoutMs) signals.push(AbortSignal.timeout(timeoutMs));
 	if (signals.length > 1) return AbortSignal.any(signals);
 	return signals[0] ?? null;
 }
 
-export function wait(ms, signal) {
-	return new Promise((resolve, reject) => {
+export function wait(ms: number, signal?: AbortSignal | null): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
 		if (signal?.aborted) {
 			reject(signal.reason ?? abortError());
 			return;
@@ -53,17 +69,28 @@ export function wait(ms, signal) {
 
 		function onAbort() {
 			clearTimeout(timer);
-			reject(signal.reason ?? abortError());
+			reject(signal?.reason ?? abortError());
 		}
 
 		signal?.addEventListener("abort", onAbort, { once: true });
 	});
 }
 
-export async function withRetry(
-	load,
-	{ attempts = DEFAULT_ATTEMPTS, baseMs = DEFAULT_BASE_MS, signal } = {},
-) {
+export interface LoadOptions {
+	attempts?: number;
+	baseMs?: number;
+	signal?: AbortSignal | null;
+	timeoutMs?: number;
+}
+
+export async function withRetry<T>(
+	load: (attempt: number) => Promise<T> | T,
+	{
+		attempts = DEFAULT_ATTEMPTS,
+		baseMs = DEFAULT_BASE_MS,
+		signal,
+	}: LoadOptions = {},
+): Promise<T> {
 	for (let attempt = 1; ; attempt++) {
 		try {
 			return await load(attempt);
@@ -78,7 +105,10 @@ export async function withRetry(
 	}
 }
 
-async function fetchResponse(url, { signal, timeoutMs } = {}) {
+async function fetchResponse(
+	url: string,
+	{ signal, timeoutMs }: LoadOptions = {},
+): Promise<Response> {
 	const response = await fetch(url, {
 		signal: combinedSignal(signal, timeoutMs) ?? undefined,
 	});
@@ -86,7 +116,10 @@ async function fetchResponse(url, { signal, timeoutMs } = {}) {
 	return response;
 }
 
-export async function fetchJson(url, options) {
+export async function fetchJson(
+	url: string,
+	options: LoadOptions = {},
+): Promise<unknown> {
 	const response = await fetchResponse(url, options);
 	try {
 		return await response.json();
@@ -95,11 +128,17 @@ export async function fetchJson(url, options) {
 	}
 }
 
-export function loadJson(url, options = {}) {
+export function loadJson(
+	url: string,
+	options: LoadOptions = {},
+): Promise<unknown> {
 	return withRetry(() => fetchJson(url, options), options);
 }
 
-export function loadImage(src, options = {}) {
+export function loadImage(
+	src: string,
+	options: LoadOptions = {},
+): Promise<HTMLImageElement> {
 	return withRetry(async () => {
 		const response = await fetchResponse(src, options);
 		const blob = await response.blob();
@@ -107,7 +146,7 @@ export function loadImage(src, options = {}) {
 
 		let onAbort = () => {};
 		try {
-			return await new Promise((resolve, reject) => {
+			return await new Promise<HTMLImageElement>((resolve, reject) => {
 				const image = new Image();
 				const cleanup = () => {
 					image.onload = null;
@@ -137,8 +176,13 @@ export function loadImage(src, options = {}) {
 	}, options);
 }
 
-export function loadAudio(ctx, url, options = {}) {
+export function loadAudio(
+	ctx: BaseAudioContext | null | undefined,
+	url: string,
+	options: LoadOptions = {},
+): Promise<AudioBuffer> {
 	return withRetry(async () => {
+		if (!ctx) throw new TypeError("audio context is unavailable");
 		const response = await fetchResponse(url, options);
 		const bytes = await response.arrayBuffer();
 		const buffer = await ctx.decodeAudioData(bytes);
@@ -147,8 +191,53 @@ export function loadAudio(ctx, url, options = {}) {
 	}, options);
 }
 
-function manifestJobs(manifest, { ctx, signal }) {
-	const jobs = [];
+export interface AssetManifest {
+	sprites?: Record<string, string>;
+	sounds?: Record<string, string>;
+	arena?: string;
+	rooms?: string;
+}
+
+export type AssetGroup = "sprites" | "sounds" | "arena" | "extras";
+
+export interface LoadJob {
+	name: string;
+	group: AssetGroup;
+	required: boolean;
+	fallback?: unknown;
+	load(): Promise<unknown>;
+}
+
+export interface LoadFailure {
+	name: string;
+	group: AssetGroup;
+	error: unknown;
+}
+
+export interface LoadProgress extends LoadFailure {
+	done: number;
+	total: number;
+}
+
+export interface LoadedAssets {
+	sprites: Record<string, unknown>;
+	sounds: Record<string, unknown>;
+	arena: unknown;
+	extras: Record<string, unknown>;
+	failures: LoadFailure[];
+}
+
+function manifestJobs(
+	manifest: AssetManifest,
+	{
+		ctx,
+		signal,
+	}: {
+		ctx: BaseAudioContext | null | undefined;
+		signal: AbortSignal | null | undefined;
+	},
+): LoadJob[] {
+	const jobs: LoadJob[] = [];
 
 	for (const [name, src] of Object.entries(manifest.sprites ?? {})) {
 		jobs.push({
@@ -173,19 +262,32 @@ function manifestJobs(manifest, { ctx, signal }) {
 			group: "arena",
 			required: false,
 			fallback: null,
-			load: () => loadJson(manifest.arena, { signal }),
+			load: () => loadJson(manifest.arena ?? "", { signal }),
 		});
 	}
 
 	return jobs;
 }
 
+export interface LoadAllOptions extends LoadOptions {
+	ctx?: BaseAudioContext;
+	extra?: LoadJob[];
+	onProgress?: (progress: LoadProgress) => void;
+	sequential?: boolean;
+}
+
 export async function loadAll(
-	manifest,
-	{ ctx, extra = [], onProgress, signal, sequential = false } = {},
-) {
+	manifest: AssetManifest,
+	{
+		ctx,
+		extra = [],
+		onProgress,
+		signal,
+		sequential = false,
+	}: LoadAllOptions = {},
+): Promise<LoadedAssets> {
 	const jobs = [...manifestJobs(manifest, { ctx, signal }), ...extra];
-	const result = {
+	const result: LoadedAssets = {
 		sprites: {},
 		sounds: {},
 		arena: null,
@@ -194,16 +296,16 @@ export async function loadAll(
 	};
 	let done = 0;
 
-	function store(job, value) {
+	function store(job: LoadJob, value: unknown) {
 		if (job.group === "arena") result.arena = value;
 		else if (job.group === "sprites" || job.group === "sounds")
 			result[job.group][job.name] = value;
 		else result.extras[job.name] = value;
 	}
 
-	async function run(job) {
-		let value = job.fallback ?? null;
-		let error = null;
+	async function run(job: LoadJob): Promise<unknown> {
+		let value: unknown = job.fallback ?? null;
+		let error: unknown = null;
 		try {
 			value = await job.load();
 		} catch (cause) {

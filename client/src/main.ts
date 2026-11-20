@@ -1,34 +1,45 @@
+import type { NetSettings } from "shared/protocol.ts";
+import type { Arena, PlayerId, Snapshot } from "shared/types.ts";
 import "./style.css";
+import type { AssetManifest, LoadedAssets, LoadJob } from "./assets/loader.ts";
 import {
 	fetchJson,
 	isCancellation,
 	loadAll,
 	loadJson,
-} from "./assets/loader.js";
-import { attachAudio, createAudio } from "./audio/audio.js";
-import { keyboardIntent } from "./controls.js";
-import { createBus } from "./events/bus.js";
-import { createInput } from "./input.js";
-import { createLoop } from "./loop.js";
-import { Connection } from "./net/connection.js";
-import { Lobby } from "./net/lobby.js";
-import { MatchView } from "./net/match.js";
-import { Predictor } from "./net/predictor.js";
-import { setupCanvas } from "./render/canvas.js";
+} from "./assets/loader.ts";
+import { attachAudio, createAudio } from "./audio/audio.ts";
+import { keyboardIntent } from "./controls.ts";
+import { createBus, detailOf } from "./events/bus.ts";
+import { createInput } from "./input.ts";
+import { createLoop } from "./loop.ts";
+import { Connection } from "./net/connection.ts";
+import type { JoinedInfo, LobbyRoom } from "./net/lobby.ts";
+import { Lobby } from "./net/lobby.ts";
+import { MatchView } from "./net/match.ts";
+import { Predictor } from "./net/predictor.ts";
+import { setupCanvas } from "./render/canvas.ts";
 import {
 	drawArena,
 	drawHud,
 	drawNetgraph,
 	drawScoreboard,
-} from "./render/draw.js";
-import { createSprites } from "./render/sprites.js";
-import { createChatPanel } from "./ui/chatView.js";
-import { createLoadingScreen } from "./ui/loading.js";
-import { createLobbyView } from "./ui/lobbyView.js";
+} from "./render/draw.ts";
+import type { Sprites } from "./render/sprites.ts";
+import { createSprites } from "./render/sprites.ts";
+import { createChatPanel } from "./ui/chatView.ts";
+import { errorMessage } from "./ui/dom.ts";
+import type { LoadingFailure, LoadingScreen } from "./ui/loading.ts";
+import { createLoadingScreen } from "./ui/loading.ts";
+import type { LobbyView } from "./ui/lobbyView.ts";
+import { createLobbyView } from "./ui/lobbyView.ts";
 
 const MANIFEST_URL = "/assets/manifest.json";
 const params = new URLSearchParams(window.location.search);
-const canvas = document.getElementById("game");
+const gameCanvas = document.getElementById("game");
+if (!(gameCanvas instanceof HTMLCanvasElement))
+	throw new Error("missing #game canvas");
+const canvas = gameCanvas;
 const { ctx, view } = setupCanvas(canvas);
 const input = createInput(window);
 const bus = createBus();
@@ -36,20 +47,57 @@ const audio = createAudio();
 const connection = new Connection();
 attachAudio(bus, audio);
 
-let bootController = null;
-let loading = null;
-let lobbyView = null;
+let bootController: AbortController | null = null;
+let loading: LoadingScreen | null = null;
+let lobbyView: LobbyView | null = null;
 
-function debugManifest(manifest) {
-	const copy = structuredClone(manifest);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+	return (
+		isRecord(value) &&
+		Object.values(value).every(
+			(entry): entry is string => typeof entry === "string",
+		)
+	);
+}
+
+function parseManifest(raw: unknown): AssetManifest {
+	if (!isRecord(raw)) throw new TypeError("invalid asset manifest");
+	return {
+		sprites: isStringRecord(raw.sprites) ? raw.sprites : undefined,
+		sounds: isStringRecord(raw.sounds) ? raw.sounds : undefined,
+		arena: typeof raw.arena === "string" ? raw.arena : undefined,
+		rooms: typeof raw.rooms === "string" ? raw.rooms : undefined,
+	};
+}
+
+function parseArena(value: unknown): Arena | null {
+	if (
+		!isRecord(value) ||
+		typeof value.width !== "number" ||
+		!Number.isFinite(value.width) ||
+		typeof value.height !== "number" ||
+		!Number.isFinite(value.height)
+	) {
+		return null;
+	}
+	return { width: value.width, height: value.height };
+}
+
+function debugManifest(raw: unknown): AssetManifest {
+	const manifest = parseManifest(raw);
+	const copy: AssetManifest = structuredClone(manifest);
 	const failure = params.get("fail");
-	if (failure === "404") copy.sprites.sheet = "/debug/404";
+	if (failure === "404" && copy.sprites) copy.sprites.sheet = "/debug/404";
 	if (failure === "json") copy.arena = "/debug/badjson";
 	return copy;
 }
 
-function debugJobs() {
-	const jobs = [];
+function debugJobs(): LoadJob[] {
+	if (!bootController) throw new Error("boot controller is unavailable");
+	const jobs: LoadJob[] = [];
 	const failure = params.get("fail");
 	const signal = bootController.signal;
 
@@ -87,7 +135,7 @@ async function boot() {
 	bootController?.abort();
 	bootController = new AbortController();
 	const { signal } = bootController;
-	const failures = [];
+	const failures: LoadingFailure[] = [];
 
 	loading ??= createLoadingScreen({
 		canvas,
@@ -108,14 +156,14 @@ async function boot() {
 	try {
 		const manifest = debugManifest(await fetchJson(MANIFEST_URL, { signal }));
 		const started = performance.now();
-		const assets = await loadAll(manifest, {
+		const assets: LoadedAssets = await loadAll(manifest, {
 			ctx: audio.context,
 			signal,
 			extra: debugJobs(),
 			sequential: params.get("sequential") === "1",
 			onProgress: ({ done, total, name, error }) => {
 				if (error) failures.push({ name, error });
-				loading.setState({ done, total, name });
+				loading?.setState({ done, total, name });
 			},
 		});
 		const elapsed = performance.now() - started;
@@ -123,34 +171,41 @@ async function boot() {
 		console.log(`[loadAll] ${mode}: ${elapsed.toFixed(0)} ms`);
 
 		for (const [name, buffer] of Object.entries(assets.sounds)) {
-			audio.set(name, buffer);
+			if (buffer instanceof AudioBuffer) audio.set(name, buffer);
 		}
 
 		loading.dispose();
 		loading = null;
 		showLobby(manifest.rooms ?? "/api/rooms", {
-			arena: assets.arena,
+			arena: parseArena(assets.arena),
 			sprites: createSprites(assets.sprites.sheet),
 		});
 	} catch (error) {
 		console.error("[loading]", error);
-		loading.setState({
+		loading?.setState({
 			phase: isCancellation(error) ? "cancelled" : "error",
-			message: error.message,
+			message: errorMessage(error),
 		});
 	}
 }
 
-function showLobby(roomsUrl, assets) {
+interface GameAssets {
+	arena: Arena | null;
+	sprites: Sprites | null;
+}
+
+function showLobby(roomsUrl: string, assets: GameAssets) {
 	const lobby = new Lobby({ url: roomsUrl, connection });
 	lobbyView = createLobbyView({ mount: document.body, lobby });
 
-	lobby.addEventListener("joined", ({ detail }) => {
+	lobby.addEventListener("joined", (event) => {
+		const detail = detailOf<JoinedInfo>(event);
 		void audio.unlock();
 		console.log(`[lobby] ${detail.name} → ${detail.room.id}`);
 	});
 
-	lobby.addEventListener("start", ({ detail }) => {
+	lobby.addEventListener("start", (event) => {
+		const detail = detailOf<JoinedInfo>(event);
 		lobby.detach();
 		lobbyView?.destroy();
 		lobbyView = null;
@@ -160,7 +215,12 @@ function showLobby(roomsUrl, assets) {
 	lobby.start();
 }
 
-function startGame(room, pilotName, assets, localId = "p1") {
+function startGame(
+	room: LobbyRoom,
+	pilotName: string,
+	assets: GameAssets,
+	localId: PlayerId = "p1",
+) {
 	const gameChat = createChatPanel({
 		mount: document.body,
 		connection,
@@ -185,7 +245,7 @@ function startGame(room, pilotName, assets, localId = "p1") {
 			pointerFire = false;
 		}, 120);
 	};
-	const onKeyDown = (event) => {
+	const onKeyDown = (event: KeyboardEvent) => {
 		if (event.code !== "BracketLeft" && event.code !== "BracketRight") return;
 		const next =
 			matchView.interpolationDelayMs +
@@ -198,14 +258,17 @@ function startGame(room, pilotName, assets, localId = "p1") {
 	canvas.addEventListener("pointerdown", onPointerDown);
 	window.addEventListener("keydown", onKeyDown);
 
-	const onSnapshot = (event) => {
-		if (!matchView.applySnapshot(event.detail)) return;
-		predictor.reconcile(event.detail, connection);
+	const onSnapshot = (event: Event) => {
+		const snapshot = detailOf<Snapshot>(event);
+		if (!matchView.applySnapshot(snapshot)) return;
+		predictor.reconcile(snapshot, connection);
 		matchView.excludeId = predictor.shipId;
 		matchView.excludeOwnerId = localId;
 	};
-	const onNetState = (event) => {
-		const { latencyMs, jitterMs, dropRate } = event.detail.net;
+	const onNetState = (event: Event) => {
+		const { latencyMs, jitterMs, dropRate } = detailOf<{ net: NetSettings }>(
+			event,
+		).net;
 		gameChat.append(
 			`[мережа] затримка ${latencyMs} мс · джиттер ${jitterMs} мс · втрати ${(dropRate * 100).toFixed(1)}%`,
 		);
@@ -213,7 +276,7 @@ function startGame(room, pilotName, assets, localId = "p1") {
 	connection.addEventListener("snapshot", onSnapshot);
 	connection.addEventListener("netState", onNetState);
 
-	function simulate(dt) {
+	function simulate(dt: number) {
 		predictor.stepSeconds = dt;
 		const intent = keyboardIntent(input);
 		if (pointerFire) intent.fire = true;
@@ -222,7 +285,7 @@ function startGame(room, pilotName, assets, localId = "p1") {
 		input.endStep();
 	}
 
-	function render(alpha) {
+	function render(alpha: number) {
 		predictor.updateVisual();
 		const age = connection.stats.lastSnapshotAt
 			? performance.now() - connection.stats.lastSnapshotAt

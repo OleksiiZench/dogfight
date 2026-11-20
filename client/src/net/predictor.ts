@@ -1,12 +1,26 @@
-import { lerp, lerpAngle } from "shared/math.js";
-import {
-	entityFromSnapshot,
-	serializeEntity,
-} from "shared/protocol/snapshot.js";
-import { Vector2 } from "shared/sim/vector.js";
-import { drawEntity } from "../render/draw.js";
+import { lerp, lerpAngle } from "shared/math.ts";
+import { entityFromSnapshot, serializeEntity } from "shared/protocol.ts";
+import type { Bullet } from "shared/sim/bullet.ts";
+import type { AnyEntity } from "shared/sim/entity.ts";
+import type { Ship } from "shared/sim/ship.ts";
+import { Vector2 } from "shared/sim/vector.ts";
+import type { WorldLike } from "shared/sim/world.ts";
+import { createStaticWorld } from "shared/sim/world.ts";
+import type {
+	Arena,
+	EntityData,
+	EntityId,
+	GameEvent,
+	Intent,
+	PlayerId,
+	Point,
+	Snapshot,
+} from "shared/types.ts";
+import { asEntityId, asSeq } from "shared/types.ts";
+import { drawEntity } from "../render/draw.ts";
+import type { Sprites } from "../render/sprites.ts";
 
-function wrappedDistance(a, b, arena) {
+function wrappedDistance(a: Point, b: Point, arena: Arena): number {
 	const dx = Math.abs(a.x - b.x);
 	const dy = Math.abs(a.y - b.y);
 	return Math.hypot(
@@ -15,8 +29,70 @@ function wrappedDistance(a, b, arena) {
 	);
 }
 
+function shipFrom(data: EntityData, arena: Arena): Ship | null {
+	const entity = entityFromSnapshot(data, arena);
+	return entity?.kind === "ship" ? entity : null;
+}
+
+function bulletFrom(data: EntityData, arena: Arena): Bullet | null {
+	const entity = entityFromSnapshot(data, arena);
+	return entity?.kind === "bullet" ? entity : null;
+}
+
+export interface PredictorWorld {
+	arena: Arena;
+	owner: Predictor;
+	nextId(): EntityId;
+	spawn(entity: AnyEntity): void;
+	emit(event: GameEvent): void;
+}
+
+function asWorld(world: PredictorWorld): WorldLike {
+	const base = createStaticWorld(world.arena);
+	return {
+		...base,
+		nextId: () => world.nextId(),
+		spawn(entity) {
+			world.spawn(entity);
+			return entity;
+		},
+		emit: (event) => world.emit(event),
+	};
+}
+
+export interface PredictorOptions {
+	arena?: Arena | null;
+	localId: PlayerId;
+	stepSeconds?: number;
+}
+
+export interface PredictorConnection {
+	stats: { correction: number; pendingInputs: number };
+}
+
+export interface PendingInput {
+	seq: number;
+	tick: number;
+	intent: Intent;
+}
+
 export class Predictor {
-	constructor({ arena, localId, stepSeconds = 1 / 30 }) {
+	arena: Arena;
+	localId: PlayerId;
+	stepSeconds: number;
+	ship: Ship | null;
+	visualShip: Ship | null;
+	visualPos: Vector2 | null;
+	visualAngle: number;
+	lastVisualAt: number;
+	pending: PendingInput[];
+	predictedBullets: Map<number, Bullet>;
+	confirmedBullets: Map<number, Bullet>;
+	seq: number;
+	tick: number;
+	world: PredictorWorld;
+
+	constructor({ arena, localId, stepSeconds = 1 / 30 }: PredictorOptions) {
 		this.arena = arena ?? { width: 1600, height: 900 };
 		this.localId = localId;
 		this.stepSeconds = stepSeconds;
@@ -33,7 +109,7 @@ export class Predictor {
 		this.world = {
 			arena: this.arena,
 			owner: this,
-			nextId: () => -1000 - this.seq,
+			nextId: () => asEntityId(-1000 - this.seq),
 			spawn(entity) {
 				if (entity.kind === "bullet") {
 					this.owner.predictedBullets.set(
@@ -46,14 +122,14 @@ export class Predictor {
 		};
 	}
 
-	get shipId() {
+	get shipId(): EntityId | null {
 		return this.ship?.id ?? null;
 	}
 
-	applyIntent(intent) {
+	applyIntent(intent: Intent): PendingInput {
 		this.seq += 1;
 		this.tick += 1;
-		const record = {
+		const record: PendingInput = {
 			seq: this.seq,
 			tick: this.tick,
 			intent: { ...intent },
@@ -66,13 +142,14 @@ export class Predictor {
 		return record;
 	}
 
-	stepShip(intent, seq) {
+	stepShip(intent: Intent, seq: number): void {
+		if (!this.ship) return;
 		this.ship.savePrevious();
-		this.ship.control({ ...intent, seq }, this.stepSeconds);
+		this.ship.control({ ...intent, seq: asSeq(seq) }, this.stepSeconds);
 		this.ship.update(this.stepSeconds);
 	}
 
-	stepBullets() {
+	stepBullets(): void {
 		for (const [key, bullet] of this.predictedBullets) {
 			bullet.savePrevious();
 			bullet.update(this.stepSeconds);
@@ -85,15 +162,17 @@ export class Predictor {
 		}
 	}
 
-	reconcileBullets(snapshot, ack) {
+	reconcileBullets(snapshot: Snapshot, ack: number): void {
 		this.arena = snapshot.arena ?? this.arena;
 		this.world.arena = this.arena;
-		const seen = new Set();
+		const seen = new Set<number>();
 		for (const data of snapshot.entities ?? []) {
 			if (data.kind !== "bullet" || data.ownerId !== this.localId) continue;
 			const key = data.sourceSeq ?? data.id;
 			seen.add(key);
-			this.confirmedBullets.set(key, entityFromSnapshot(data, this.arena));
+			const bullet = bulletFrom(data, this.arena);
+			if (!bullet) continue;
+			this.confirmedBullets.set(key, bullet);
 			if (data.sourceSeq !== null && data.sourceSeq !== undefined) {
 				this.predictedBullets.delete(data.sourceSeq);
 			}
@@ -106,7 +185,7 @@ export class Predictor {
 		}
 	}
 
-	reconcile(snapshot, connection) {
+	reconcile(snapshot: Snapshot, connection: PredictorConnection): void {
 		this.reconcileBullets(snapshot, Number(snapshot.lastProcessedSeq ?? 0));
 		const ack = Number(snapshot.lastProcessedSeq ?? 0);
 		const data = snapshot.entities?.find(
@@ -122,13 +201,14 @@ export class Predictor {
 			return;
 		}
 
-		const authoritative = entityFromSnapshot(data, this.arena);
+		const authoritative = shipFrom(data, this.arena);
+		if (!authoritative) return;
 		const correction =
 			this.ship?.id === data.id
 				? wrappedDistance(this.ship.pos, authoritative.pos, this.arena)
 				: 0;
 		connection.stats.correction = correction;
-		authoritative.world = this.world;
+		authoritative.world = asWorld(this.world);
 		this.ship = authoritative;
 		this.pending = this.pending.filter((record) => record.seq > ack);
 		for (const record of this.pending) {
@@ -145,14 +225,12 @@ export class Predictor {
 			this.visualPos = this.ship.pos;
 			this.visualAngle = this.ship.angle;
 		}
-		this.visualShip = entityFromSnapshot(
-			serializeEntity(this.ship),
-			this.arena,
-		);
-		this.visualShip.world = { arena: this.arena };
+		this.visualShip = shipFrom(serializeEntity(this.ship), this.arena);
+		if (!this.visualShip) return;
+		this.visualShip.world = createStaticWorld(this.arena);
 	}
 
-	updateVisual(now = performance.now()) {
+	updateVisual(now = performance.now()): void {
 		if (!this.ship || !this.visualShip || !this.visualPos) return;
 		const delta = Math.min((now - this.lastVisualAt) / 1000, 0.1);
 		this.lastVisualAt = now;
@@ -171,7 +249,11 @@ export class Predictor {
 		this.visualShip.thrusting = this.ship.thrusting;
 	}
 
-	draw(ctx, alpha, sprites) {
+	draw(
+		ctx: CanvasRenderingContext2D,
+		alpha: number,
+		sprites: Sprites | null,
+	): void {
 		for (const bullet of this.confirmedBullets.values())
 			drawEntity(ctx, bullet, alpha, sprites);
 		for (const bullet of this.predictedBullets.values())

@@ -1,6 +1,15 @@
-import { createChatPanel } from "./chatView.js";
+import type { ServerMessage } from "shared/protocol.ts";
+import { detailOf } from "../events/bus.ts";
+import type {
+	ConnectionStateDetail,
+	JoinedInfo,
+	Lobby,
+	LobbyRoom,
+} from "../net/lobby.ts";
+import { createChatPanel } from "./chatView.ts";
+import { errorMessage, requireElement } from "./dom.ts";
 
-const STATE_TEXT = {
+const STATE_TEXT: Record<ConnectionStateDetail["state"], string> = {
 	connected: "З'єднання встановлено",
 	connecting: "Підключення…",
 	reconnecting: "Перепідключення…",
@@ -8,7 +17,20 @@ const STATE_TEXT = {
 	error: "Помилка з'єднання",
 };
 
-export function createLobbyView({ mount, lobby }) {
+export interface LobbyViewOptions {
+	mount: ParentNode;
+	lobby: Lobby;
+}
+
+export interface LobbyView {
+	destroy(): void;
+}
+
+type RoomsChangedDetail = { rooms: LobbyRoom[] };
+type RosterDetail = Extract<ServerMessage, { type: "roster" }>;
+type NoticeDetail = { message?: string };
+
+export function createLobbyView({ mount, lobby }: LobbyViewOptions): LobbyView {
 	const root = document.createElement("div");
 	root.className = "overlay";
 	root.innerHTML = `
@@ -31,17 +53,19 @@ export function createLobbyView({ mount, lobby }) {
 		</div>`;
 	mount.append(root);
 
-	const panel = root.querySelector(".lobby-panel");
-	const joinForm = root.querySelector(".join-form");
-	const nameInput = root.querySelector("[name=name]");
-	const roomSelect = root.querySelector("[name=room]");
-	const info = root.querySelector(".room-info");
-	const status = root.querySelector(".status");
-	const startButton = root.querySelector(".start");
-	const rosterList = root.querySelector(".roster ul");
+	const panel = requireElement<HTMLElement>(root, ".lobby-panel");
+	const joinForm = requireElement<HTMLFormElement>(root, ".join-form");
+	const nameInput = requireElement<HTMLInputElement>(root, "[name=name]");
+	const roomSelect = requireElement<HTMLSelectElement>(root, "[name=room]");
+	const info = requireElement<HTMLParagraphElement>(root, ".room-info");
+	const status = requireElement<HTMLParagraphElement>(root, ".status");
+	const startButton = requireElement<HTMLButtonElement>(root, ".start");
+	const rosterList = requireElement<HTMLUListElement>(root, ".roster ul");
+	const connection = lobby.connection;
+	if (!connection) throw new Error("lobby connection is unavailable");
 	const chat = createChatPanel({
 		mount: panel,
-		connection: lobby.connection,
+		connection,
 		title: "Чат кімнати",
 		variant: "lobby-chat",
 	});
@@ -55,10 +79,10 @@ export function createLobbyView({ mount, lobby }) {
 			: "";
 	}
 
-	function renderRooms(event) {
+	function renderRooms(event: Event) {
 		const previous = roomSelect.value;
 		roomSelect.replaceChildren();
-		for (const room of event.detail.rooms) {
+		for (const room of detailOf<RoomsChangedDetail>(event).rooms) {
 			roomSelect.add(
 				new Option(
 					`${room.name} (${room.players ?? 0}/${room.capacity ?? 8})`,
@@ -77,35 +101,38 @@ export function createLobbyView({ mount, lobby }) {
 		status.textContent = "Оновлення списку…";
 	}
 
-	function onFailed(event) {
-		status.textContent = `Помилка опитування: ${event.detail.error.message}`;
+	function onFailed(event: Event) {
+		status.textContent = `Помилка опитування: ${errorMessage(detailOf<{ error: unknown }>(event).error)}`;
 	}
 
 	function onRoomChange() {
 		updateInfo();
 	}
 
-	function onJoining(event) {
-		status.textContent = `Вхід у ${event.detail.room.name}…`;
+	function onJoining(event: Event) {
+		const detail = detailOf<JoinedInfo>(event);
+		status.textContent = `Вхід у ${detail.room.name}…`;
 		startButton.disabled = true;
 	}
 
-	function onJoined(event) {
-		status.textContent = `Ви в кімнаті ${event.detail.room.name} як ${event.detail.name}`;
+	function onJoined(event: Event) {
+		const detail = detailOf<JoinedInfo>(event);
+		status.textContent = `Ви в кімнаті ${detail.room.name} як ${detail.name}`;
 		startButton.disabled = false;
 	}
 
-	function onRoster(event) {
+	function onRoster(event: Event) {
 		rosterList.replaceChildren();
-		for (const player of event.detail.players ?? []) {
+		for (const player of detailOf<RosterDetail>(event).players ?? []) {
 			const item = document.createElement("li");
 			item.textContent = player.name;
 			rosterList.append(item);
 		}
 	}
 
-	function onConnectionState(event) {
-		const { state, attempt, delay, code } = event.detail;
+	function onConnectionState(event: Event) {
+		const { state, attempt, delay, code } =
+			detailOf<ConnectionStateDetail>(event);
 		const base = STATE_TEXT[state] ?? state;
 		status.textContent =
 			state === "reconnecting"
@@ -116,11 +143,12 @@ export function createLobbyView({ mount, lobby }) {
 		if (state === "closed" || state === "error") startButton.disabled = true;
 	}
 
-	function onNotice(event) {
-		if (event.detail.message) status.textContent = event.detail.message;
+	function onNotice(event: Event) {
+		const { message } = detailOf<NoticeDetail>(event);
+		if (message) status.textContent = message;
 	}
 
-	function onJoinSubmit(event) {
+	function onJoinSubmit(event: SubmitEvent) {
 		event.preventDefault();
 		lobby.join(roomSelect.value, { name: nameInput.value.trim() || "PILOT" });
 	}

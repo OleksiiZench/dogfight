@@ -1,15 +1,21 @@
-export function createInput(target) {
-	const down = new Set();
-	const pressed = new Set();
+export interface InputController {
+	isDown(code: string): boolean;
+	justPressed(code: string): boolean;
+	endStep(): void;
+}
 
-	target.addEventListener("keydown", (e) => {
+export function createInput(target: Window): InputController {
+	const down = new Set<string>();
+	const pressed = new Set<string>();
+
+	target.addEventListener("keydown", (e: KeyboardEvent) => {
 		if (e.code.startsWith("Arrow") || e.code === "Space") e.preventDefault();
 		if (e.repeat) return;
 		if (!down.has(e.code)) pressed.add(e.code);
 		down.add(e.code);
 	});
 
-	target.addEventListener("keyup", (e) => {
+	target.addEventListener("keyup", (e: KeyboardEvent) => {
 		down.delete(e.code);
 	});
 

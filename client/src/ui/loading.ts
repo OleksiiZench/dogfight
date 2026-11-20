@@ -1,5 +1,54 @@
-export function createLoadingScreen({ canvas, ctx, view, onRetry, onCancel }) {
-	const state = {
+import type { ViewSize } from "../render/canvas.ts";
+import { errorMessage } from "./dom.ts";
+
+export interface LoadingFailure {
+	name: string;
+	error: unknown;
+}
+
+export interface LoadingState {
+	phase: "loading" | "cancelled" | "error";
+	done: number;
+	total: number;
+	name: string;
+	failures: LoadingFailure[];
+	message: string;
+}
+
+export interface LoadingOptions {
+	canvas: HTMLCanvasElement;
+	ctx: CanvasRenderingContext2D;
+	view: ViewSize;
+	onRetry?: () => void;
+	onCancel?: () => void;
+}
+
+export interface LoadingScreen {
+	readonly state: LoadingState;
+	setState(patch: Partial<LoadingState>): void;
+	draw(): void;
+	dispose(): void;
+}
+
+type ButtonId = "retry" | "cancel";
+
+interface Button {
+	id: ButtonId;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	label: string;
+}
+
+export function createLoadingScreen({
+	canvas,
+	ctx,
+	view,
+	onRetry,
+	onCancel,
+}: LoadingOptions): LoadingScreen {
+	const state: LoadingState = {
 		phase: "loading",
 		done: 0,
 		total: 1,
@@ -7,9 +56,15 @@ export function createLoadingScreen({ canvas, ctx, view, onRetry, onCancel }) {
 		failures: [],
 		message: "",
 	};
-	let buttons = [];
+	let buttons: Button[] = [];
 
-	function button(id, label, x, y, width) {
+	function button(
+		id: ButtonId,
+		label: string,
+		x: number,
+		y: number,
+		width: number,
+	) {
 		buttons.push({ id, x, y, width, height: 38, label });
 		ctx.fillStyle = id === "retry" ? "#0e7490" : "#374151";
 		ctx.fillRect(x, y, width, 38);
@@ -67,7 +122,7 @@ export function createLoadingScreen({ canvas, ctx, view, onRetry, onCancel }) {
 		for (const failure of state.failures.slice(0, 3)) {
 			ctx.fillStyle = "#fbbf24";
 			ctx.fillText(
-				`пропущено ${failure.name}: ${failure.error?.message ?? "помилка"}`,
+				`пропущено ${failure.name}: ${errorMessage(failure.error)}`,
 				left,
 				lineY,
 			);
@@ -90,12 +145,12 @@ export function createLoadingScreen({ canvas, ctx, view, onRetry, onCancel }) {
 		}
 	}
 
-	function setState(patch) {
+	function setState(patch: Partial<LoadingState>) {
 		Object.assign(state, patch);
 		draw();
 	}
 
-	function onPointerDown(event) {
+	function onPointerDown(event: PointerEvent) {
 		const hit = buttons.find(
 			(b) =>
 				event.offsetX >= b.x &&
