@@ -8,7 +8,30 @@ const urls = [
 	"http://localhost:3001/?debug=1&latency=100&jitter=30&drop=0.02&pilot=Alpha",
 	"http://localhost:3001/?debug=1&latency=100&jitter=30&drop=0.02&pilot=Beta",
 ];
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> =>
+	new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
+
+interface CdpTarget {
+	type: string;
+	url: string;
+	webSocketDebuggerUrl: string;
+}
+
+interface CdpSession {
+	ws: WebSocket;
+	send(method: string, params?: Record<string, unknown>): Promise<unknown>;
+}
+
+interface PageClient extends CdpSession {
+	url: string;
+	evaluate(expression: string): Promise<unknown>;
+	waitFor(expression: string, label: string): Promise<void>;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
 
 const browser = spawn(
 	"chromium",
@@ -28,23 +51,34 @@ const browser = spawn(
 	{ stdio: "ignore" },
 );
 
-async function transport(wsUrl) {
+async function transport(wsUrl: string): Promise<CdpSession> {
 	const ws = new WebSocket(wsUrl);
-	await new Promise((resolve, reject) => {
-		ws.onopen = resolve;
-		ws.onerror = reject;
+	await new Promise<void>((resolve, reject) => {
+		ws.onopen = () => resolve();
+		ws.onerror = (event) => reject(event);
 	});
 	let id = 1;
-	const pending = new Map();
+	const pending = new Map<
+		number,
+		{
+			resolve: (value: unknown) => void;
+			reject: (reason: unknown) => void;
+		}
+	>();
 	ws.onmessage = ({ data }) => {
-		const message = JSON.parse(data);
-		if (!message.id || !pending.has(message.id)) return;
-		const { resolve, reject } = pending.get(message.id);
-		pending.delete(message.id);
-		if (message.error) reject(new Error(JSON.stringify(message.error)));
-		else resolve(message.result);
+		const raw: unknown = JSON.parse(String(data));
+		if (!isRecord(raw) || typeof raw.id !== "number" || !raw.id) return;
+		const messageId = raw.id;
+		const callbacks = pending.get(messageId);
+		if (!callbacks) return;
+		pending.delete(messageId);
+		if (raw.error) callbacks.reject(new Error(JSON.stringify(raw.error)));
+		else callbacks.resolve(raw.result);
 	};
-	const send = (method, params = {}) =>
+	const send = (
+		method: string,
+		params: Record<string, unknown> = {},
+	): Promise<unknown> =>
 		new Promise((resolve, reject) => {
 			const next = id++;
 			pending.set(next, { resolve, reject });
@@ -53,18 +87,23 @@ async function transport(wsUrl) {
 	return { ws, send };
 }
 
-async function pageClient(target) {
+async function pageClient(target: CdpTarget): Promise<PageClient> {
 	const base = await transport(target.webSocketDebuggerUrl);
-	const evaluate = async (expression) => {
-		const { result, exceptionDetails } = await base.send("Runtime.evaluate", {
+	const evaluate = async (expression: string): Promise<unknown> => {
+		const response: unknown = await base.send("Runtime.evaluate", {
 			expression,
 			returnByValue: true,
 			awaitPromise: true,
 		});
-		if (exceptionDetails) throw new Error(exceptionDetails.text);
-		return result.value;
+		if (!isRecord(response))
+			throw new TypeError("invalid Runtime.evaluate response");
+		if (isRecord(response.exceptionDetails))
+			throw new Error(String(response.exceptionDetails.text));
+		if (!isRecord(response.result))
+			throw new TypeError("invalid Runtime.evaluate response");
+		return response.result.value;
 	};
-	const waitFor = async (expression, label) => {
+	const waitFor = async (expression: string, label: string): Promise<void> => {
 		for (let i = 0; i < 150; i++) {
 			if (await evaluate(expression)) return;
 			await sleep(100);
@@ -74,7 +113,13 @@ async function pageClient(target) {
 	return { ...base, evaluate, waitFor, url: target.url };
 }
 
-const KEYS = {
+type KeyName = "ArrowUp" | "ArrowLeft" | "ArrowRight" | "Space";
+interface CdpKey {
+	key: string;
+	code: string;
+	windowsVirtualKeyCode: number;
+}
+const KEYS: Record<KeyName, CdpKey> = {
 	ArrowUp: { key: "ArrowUp", code: "ArrowUp", windowsVirtualKeyCode: 38 },
 	ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", windowsVirtualKeyCode: 37 },
 	ArrowRight: {
@@ -84,10 +129,15 @@ const KEYS = {
 	},
 	Space: { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
 };
-const held = new WeakMap();
 
-async function setKey(page, name, down) {
-	const state = held.get(page) ?? new Set();
+const held = new WeakMap<PageClient, Set<KeyName>>();
+
+async function setKey(
+	page: PageClient,
+	name: KeyName,
+	down: boolean,
+): Promise<void> {
+	const state = held.get(page) ?? new Set<KeyName>();
 	held.set(page, state);
 	if (state.has(name) === down) return;
 	const definition = KEYS[name];
@@ -106,15 +156,32 @@ for (let i = 0; i < 60; i++) {
 	await sleep(100);
 }
 
-const version = await fetch(`${CDP}/json/version`).then((r) => r.json());
+const version: unknown = await fetch(`${CDP}/json/version`).then((r) =>
+	r.json(),
+);
+if (!isRecord(version) || typeof version.webSocketDebuggerUrl !== "string")
+	throw new TypeError("invalid browser version response");
 const browserSession = await transport(version.webSocketDebuggerUrl);
 for (const url of urls) {
 	await browserSession.send("Target.createTarget", { url });
 }
-const targets = (await fetch(`${CDP}/json/list`).then((r) => r.json()))
-	.filter((target) => target.type === "page" && target.url.includes("pilot="))
+const targetList: unknown = await fetch(`${CDP}/json/list`).then((r) =>
+	r.json(),
+);
+if (!Array.isArray(targetList))
+	throw new TypeError("invalid target list response");
+const targetsRaw: unknown[] = targetList;
+const targets: CdpTarget[] = targetsRaw
+	.filter(
+		(target): target is CdpTarget =>
+			isRecord(target) &&
+			target.type === "page" &&
+			typeof target.url === "string" &&
+			target.url.includes("pilot=") &&
+			typeof target.webSocketDebuggerUrl === "string",
+	)
 	.sort((a, b) => a.url.localeCompare(b.url));
-const pages = await Promise.all(targets.map(pageClient));
+const pages: PageClient[] = await Promise.all(targets.map(pageClient));
 
 try {
 	for (const page of pages) {
@@ -143,34 +210,47 @@ try {
 
 	await rm(FRAMES, { recursive: true, force: true });
 	await mkdir(FRAMES, { recursive: true });
-	const directions = [1, -1];
-	const turnKeys = [
+	const directions: number[] = [1, -1];
+	const turnKeys: readonly (readonly [KeyName, KeyName])[] = [
 		["ArrowLeft", "ArrowRight"],
 		["ArrowRight", "ArrowLeft"],
 	];
 	for (let i = 0; i < pages.length; i++) {
-		await setKey(pages[i], "ArrowUp", true);
-		await setKey(pages[i], "Space", true);
-		await setKey(pages[i], turnKeys[i][directions[i] > 0 ? 1 : 0], true);
+		const page = pages[i];
+		const keys = turnKeys[i];
+		const direction = directions[i];
+		if (!page || !keys || direction === undefined)
+			throw new TypeError("missing page or turn keys");
+		await setKey(page, "ArrowUp", true);
+		await setKey(page, "Space", true);
+		await setKey(page, keys[direction > 0 ? 1 : 0], true);
 	}
 
 	for (let frame = 0; frame < 200; frame++) {
 		if (frame % 20 === 0) {
 			for (let i = 0; i < pages.length; i++) {
-				directions[i] *= -1;
-				await setKey(pages[i], turnKeys[i][0], directions[i] < 0);
-				await setKey(pages[i], turnKeys[i][1], directions[i] > 0);
+				const page = pages[i];
+				const keys = turnKeys[i];
+				const direction = directions[i];
+				if (!page || !keys || direction === undefined)
+					throw new TypeError("missing page or turn keys");
+				const next = direction * -1;
+				directions[i] = next;
+				await setKey(page, keys[0], next < 0);
+				await setKey(page, keys[1], next > 0);
 			}
 		}
 		await Promise.all(
 			pages.map(async (page, index) => {
-				const { data } = await page.send("Page.captureScreenshot", {
+				const response: unknown = await page.send("Page.captureScreenshot", {
 					format: "png",
 					fromSurface: true,
 				});
+				if (!isRecord(response) || typeof response.data !== "string")
+					throw new TypeError("invalid screenshot response");
 				await writeFile(
 					`${FRAMES}/${index}-${String(frame).padStart(4, "0")}.png`,
-					Buffer.from(data, "base64"),
+					Buffer.from(response.data, "base64"),
 				);
 			}),
 		);

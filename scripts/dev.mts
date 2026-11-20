@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 
-const children = [];
+const children: ChildProcess[] = [];
 
-function run(workspace) {
+function run(workspace: string): ChildProcess {
 	const child = spawn("npm", ["run", "dev", "--workspace", workspace], {
 		stdio: "inherit",
 		env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? "1" },
@@ -17,18 +17,20 @@ function run(workspace) {
 
 let shuttingDown = false;
 
-function stop(signal = "SIGTERM", code = 0) {
+function stop(signal: NodeJS.Signals = "SIGTERM", code = 0): void {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	for (const child of children) {
 		if (child.exitCode === null) child.kill(signal);
 	}
-	setTimeout(() => process.exit(code), 50).unref();
+	const timer: NodeJS.Timeout = setTimeout(() => process.exit(code), 50);
+	timer.unref();
 }
 
 run("dogfight-server");
 run("dogfight-client");
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
+const signals: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
+for (const signal of signals) {
 	process.on(signal, () => stop(signal, 0));
 }
